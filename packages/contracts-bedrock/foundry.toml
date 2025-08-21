@@ -3,10 +3,17 @@
 ################################################################
 
 [profile.default]
-
-src = 'src'
-out = 'forge-artifacts'
+# 源码/脚本目录
+src   = 'src'
 script = 'scripts'
+
+# 【关键】Foundry 产物目录：与 Hardhat 的 artifacts/ 分离，避免互相覆盖/混淆
+# 之前的错误主要是脚本在找 Foundry 产物，而实际只有 Hardhat 产物。
+# 保持 forge 产物在 forge-artifacts 下，并确保每次部署前:
+#   forge clean && forge build -vvv
+out = 'forge-artifacts'
+
+# Hardhat 风格的 build-info 放在 artifacts/build-info（保持不变，很多工具依赖）
 build_info_path = 'artifacts/build-info'
 
 optimizer = true
@@ -14,10 +21,7 @@ optimizer_runs = 999999
 use_literal_content = true
 
 # IMPORTANT:
-# When adding any new compiler profiles or compilation restrictions, you must
-# also update the restrictions in the "LITE" profile to match. This guarantees
-# that builds will fully overwrite one another without needing to clean the
-# entire build directory.
+# 当新增编译profiles或限制时，LITE 配置也要同步，保证覆盖编译不需要清理 build 目录
 additional_compiler_profiles = [
   { name = "dispute", optimizer_runs = 5000 },
 ]
@@ -29,10 +33,10 @@ compilation_restrictions = [
   { paths = "src/L1/OptimismPortal2.sol", optimizer_runs = 5000 }
 ]
 
-extra_output = ['devdoc', 'userdoc', 'metadata', 'storageLayout']
-bytecode_hash = 'none'
-ast = true
-evm_version = 'cancun'
+extra_output   = ['devdoc', 'userdoc', 'metadata', 'storageLayout']
+bytecode_hash  = 'none'
+ast            = true
+evm_version    = 'cancun'
 
 remappings = [
   '@openzeppelin/contracts-upgradeable/=lib/openzeppelin-contracts-upgradeable/contracts',
@@ -49,40 +53,47 @@ remappings = [
   'interfaces/=interfaces'
 ]
 
+# 允许 Foundry 脚本读取/写入的路径（vm.readFile / vm.getCode 等）
+# - 明确允许读取 forge-artifacts（Foundry 产物）与 artifacts（Hardhat 产物 & build-info）
 fs_permissions = [
-  { access='read-write', path='./.resource-metering.csv' },
-  { access='read-write', path='./snapshots/' },
-  { access='read-write', path='./deployments/' },
-  { access='read', path='./deploy-config/' },
-  { access='read', path='./deploy-config-periphery/' },
-  { access='read', path='./broadcast/' },
-  { access='read', path = './forge-artifacts/' },
-  { access='read-write', path='./.testdata/' },
-  { access='read', path='./kout-deployment' },
-  { access='read', path='./test/fixtures' },
-  { access='read', path='./lib/superchain-registry/superchain/configs/' },
-  { access='read', path='./lib/superchain-registry/validation/standard/' },
+  { access = 'read',       path = '/home/ubuntu/apertium-l2/generated/' },
+  { access = 'read-write', path = './.resource-metering.csv' },
+  { access = 'read-write', path = './snapshots/' },
+  { access = 'read-write', path = './deployments/' },
+  { access = 'read-write', path = './deployments/getting-started/' },
+  { access = 'read',       path = './deploy-config/' },
+  { access = 'read',       path = './deploy-config-periphery/' },
+  { access = 'read',       path = './broadcast/' },
+
+  # 关键：Foundry 产物目录（与 out 保持一致）
+  { access = 'read',       path = './forge-artifacts/' },
+
+  # 关键：Hardhat 目录以及 build-info（若脚本读取 build-info/或其他工具依赖）
+  { access = 'read',       path = './artifacts/' },
+  { access = 'read',       path = './artifacts/build-info' },
+
+  { access = 'read-write', path = './.testdata/' },
+  { access = 'read',       path = './kout-deployment' },
+  { access = 'read',       path = './test/fixtures' },
+  { access = 'read',       path = './lib/superchain-registry/superchain/configs/' },
+  { access = 'read',       path = './lib/superchain-registry/validation/standard/' },
 ]
 
-# 5159 error code is selfdestruct error code
+# 5159 是 selfdestruct 的错误码（忽略）
 ignored_error_codes = ["transient-storage", "code-size", "init-code-size", 5159]
 ffi = true
 
-# We set the gas limit to max int64 to avoid running out of gas during testing, since the default
-# gas limit is 1B and some of our tests require more gas than that, such as
-# test_callWithMinGas_noLeakageLow_succeeds. We use this gas limit since it was the default gas
-# limit prior to https://github.com/foundry-rs/foundry/pull/8274. Due to toml-rs limitations, if
-# you increase the gas limit above this value it must be a string.
+# 提高本地测试 gas 上限
 gas_limit = 9223372036854775807
 
 [fuzz]
 runs = 64
 
 [fmt]
-line_length=120
-multiline_func_header='all'
-bracket_spacing=true
-wrap_comments=true
+line_length = 120
+multiline_func_header = 'all'
+bracket_spacing = true
+wrap_comments = true
 
 ################################################################
 #                         PROFILE: CI                          #
@@ -131,7 +142,7 @@ timeout = 300
 optimizer = false
 
 # IMPORTANT:
-# See the info in the "DEFAULT" profile to understand this section.
+# 与 default 保持编译限制一致（优化开关为 0）
 additional_compiler_profiles = [
   { name = "dispute", optimizer_runs = 0 },
 ]
@@ -148,7 +159,7 @@ compilation_restrictions = [
 ################################################################
 
 [profile.kprove]
-src = 'test/kontrol/proofs'
-out = 'kout-proofs'
-test = 'test/kontrol/proofs'
+src   = 'test/kontrol/proofs'
+out   = 'kout-proofs'
+test  = 'test/kontrol/proofs'
 script = 'test/kontrol/proofs'

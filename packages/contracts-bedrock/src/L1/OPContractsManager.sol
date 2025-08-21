@@ -64,6 +64,9 @@ abstract contract OPContractsManagerBase {
     /// @notice Thrown when an invalid game type is used.
     error OPContractsManager_InvalidGameType();
 
+    /// @notice Thrown when a proxy deployment fails.
+    error OPContractsManager_ProxyDeploymentFailed(string contractName);
+
     /// @notice The blueprint contract addresses contract.
     OPContractsManagerContractsContainer public immutable contractsContainer;
 
@@ -146,10 +149,13 @@ abstract contract OPContractsManagerBase {
         string memory _contractName
     )
         internal
-        returns (address)
+        returns (address proxyAddr_)
     {
         bytes32 salt = computeSalt(_l2ChainId, _saltMixer, _contractName);
-        return Blueprint.deployFrom(getBlueprints().proxy, salt, abi.encode(_proxyAdmin));
+        proxyAddr_ = Blueprint.deployFrom(getBlueprints().proxy, salt, abi.encode(_proxyAdmin));
+        if (proxyAddr_ == address(0)) {
+            revert OPContractsManager_ProxyDeploymentFailed(_contractName);
+        }
     }
 
     /// @notice Makes an internal call to the target to initialize the proxy with the specified data.

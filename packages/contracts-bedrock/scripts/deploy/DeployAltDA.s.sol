@@ -36,7 +36,7 @@ contract DeployAltDA is Script {
 
     function deployDataAvailabilityChallengeProxy(Input memory _input, Output memory _output) internal virtual {
         bytes32 salt = _input.salt;
-        vm.broadcast(msg.sender);
+        //vm.broadcast(msg.sender);
         IDataAvailabilityChallenge proxy = IDataAvailabilityChallenge(
             DeployUtils.create2({
                 _name: "Proxy",
@@ -50,7 +50,7 @@ contract DeployAltDA is Script {
 
     function deployDataAvailabilityChallengeImpl(Input memory _input, Output memory _output) internal virtual {
         bytes32 salt = _input.salt;
-        vm.broadcast(msg.sender);
+        //vm.broadcast(msg.sender);
         IDataAvailabilityChallenge impl = IDataAvailabilityChallenge(
             DeployUtils.create2({
                 _name: "DataAvailabilityChallenge",

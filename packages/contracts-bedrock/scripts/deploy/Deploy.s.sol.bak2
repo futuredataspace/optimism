@@ -135,12 +135,15 @@ contract Deploy is Deployer {
 
         console.log("Deploying a fresh OP Stack with existing SuperchainConfig and ProtocolVersions");
 
-        IProxy scProxy = IProxy(_superchainConfigProxy);
-        artifacts.save("SuperchainConfigImpl", scProxy.implementation());
+        // When using existing superchain contracts, we trust the provided addresses
+        // and do not need to query their implementation details, which can cause
+        // permission issues if the caller is not the admin of the proxy.
+        // IProxy scProxy = IProxy(_superchainConfigProxy);
+        // artifacts.save("SuperchainConfigImpl", scProxy.implementation());
         artifacts.save("SuperchainConfigProxy", _superchainConfigProxy);
 
-        IProxy pvProxy = IProxy(_protocolVersionsProxy);
-        artifacts.save("ProtocolVersionsImpl", pvProxy.implementation());
+        // IProxy pvProxy = IProxy(_protocolVersionsProxy);
+        // artifacts.save("ProtocolVersionsImpl", pvProxy.implementation());
         artifacts.save("ProtocolVersionsProxy", _protocolVersionsProxy);
 
         _run({ _needsSuperchain: false });
@@ -167,11 +170,11 @@ contract Deploy is Deployer {
         deployOpChain();
 
         // Set the respected game type according to the deploy config
-        // vm.startPrank(ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy")).guardian());
-        // IAnchorStateRegistry(artifacts.mustGetAddress("AnchorStateRegistryProxy")).setRespectedGameType(
-        //     GameType.wrap(uint32(cfg.respectedGameType()))
-        // );
-        // vm.stopPrank();
+        vm.startPrank(ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy")).guardian());
+        IAnchorStateRegistry(artifacts.mustGetAddress("AnchorStateRegistryProxy")).setRespectedGameType(
+            GameType.wrap(uint32(cfg.respectedGameType()))
+        );
+        vm.stopPrank();
 
         if (cfg.useAltDA()) {
             bytes32 typeHash = keccak256(bytes(cfg.daCommitmentType()));
@@ -210,7 +213,6 @@ contract Deploy is Deployer {
     ///         2. The ProtocolVersions contract
     function deploySuperchain() public {
         console.log("Setting up Superchain");
-        //vm.startBroadcast();
         DeploySuperchain ds = new DeploySuperchain();
 
         // Run the deployment script.
@@ -246,7 +248,6 @@ contract Deploy is Deployer {
         // Finally replace the SuperchainConfig proxy with the implementation address and run assertions on it.
         contracts.SuperchainConfig = artifacts.mustGetAddress("SuperchainConfigImpl");
         ChainAssertions.checkSuperchainConfig({ _contracts: contracts, _cfg: cfg, _isProxy: false });
-        //vm.stopBroadcast();
     }
 
     /// @notice Deploy all of the implementations
@@ -335,15 +336,7 @@ contract Deploy is Deployer {
         IOPContractsManager opcm = IOPContractsManager(artifacts.mustGetAddress("OPContractsManager"));
 
         IOPContractsManager.DeployInput memory deployInput = getDeployInput();
-
-        vm.startBroadcast();
         IOPContractsManager.DeployOutput memory deployOutput = opcm.deploy(deployInput);
-        vm.stopBroadcast();
-
-        require(_hasCode(address(deployOutput.systemConfigProxy)), "OPCM_DEPLOY_DID_NOT_CREATE_SystemConfigProxy");
-        require(_hasCode(address(deployOutput.addressManager)), "OPCM_DEPLOY_DID_NOT_CREATE_AddressManager");
-        require(_hasCode(address(deployOutput.l1StandardBridgeProxy)), "OPCM_DEPLOY_DID_NOT_CREATE_L1StandardBridgeProxy");
-        require(_hasCode(address(deployOutput.optimismPortalProxy)), "OPCM_DEPLOY_DID_NOT_CREATE_OptimismPortalProxy");
 
         // Store code in the Final system owner address so that it can be used for prank delegatecalls
         // Store "fe" opcode so that accidental calls to this address revert
@@ -367,36 +360,18 @@ contract Deploy is Deployer {
         artifacts.save("OptimismPortalProxy", address(deployOutput.optimismPortalProxy));
         artifacts.save("OptimismPortal2Proxy", address(deployOutput.optimismPortalProxy));
 
-        // Check if the permissionless game implementation is already set
-        IDisputeGameFactory factory = IDisputeGameFactory(artifacts.mustGetAddress("DisputeGameFactoryProxy"));
-        address permissionlessGameImpl = address(factory.gameImpls(GameTypes.CANNON));
+        // The OPCM deployer script returns the address of the `DelayedWETH` contract for the permissioned game.
+        // There is no need to deploy a separate one. We just save the artifact here.
+        artifacts.save("DelayedWETHPermissionedGameProxy", address(deployOutput.delayedWETHPermissionedGameProxy));
 
-        // Deploy and setup the PermissionlessDelayedWeth not provided by the OPCM.
-        // If the following require statement is hit, you can delete the block of code after it.
-        require(
-            permissionlessGameImpl == address(0),
-            "Deploy: The PermissionlessDelayedWETH is already set by the OPCM, it is no longer necessary to deploy it separately."
-        );
+        // Check if a permissionless game was also deployed by the OPCM. If so, save its artifact as well.
+        if (address(deployOutput.delayedWETHPermissionlessGameProxy) != address(0)) {
+            artifacts.save("DelayedWETHPermissionlessGameProxy", address(deployOutput.delayedWETHPermissionlessGameProxy));
+        }
 
-        vm.startBroadcast();
-        address payable delayedWETHPermissionlessGameProxy = payable(
-            deployERC1967ProxyWithOwner("DelayedWETHProxy", address(deployOutput.opChainProxyAdmin))
-        );
-        vm.stopBroadcast();
-
-        vm.startBroadcast();
-        deployOutput.opChainProxyAdmin.upgradeAndCall(
-            payable(delayedWETHPermissionlessGameProxy),
-            artifacts.mustGetAddress("DelayedWETHImpl"),
-            abi.encodeCall(IDelayedWETH.initialize, (deployOutput.systemConfigProxy))
-        );
-        vm.stopBroadcast();
-    }
-
-    function _hasCode(address a) internal view returns (bool) {
-        uint256 size;
-        assembly { size := extcodesize(a) }
-        return size > 0;
+        // Store code in the Final system owner address so that it can be used for prank delegatecalls
+        // Store "fe" opcode so that accidental calls to this address revert
+        vm.etch(cfg.finalSystemOwner(), hex"fe");
     }
 
     ////////////////////////////////////////////////////////////////
@@ -412,9 +387,9 @@ contract Deploy is Deployer {
         address _proxyOwner
     )
         public
-        ///broadcast
         returns (address addr_)
     {
+        vm.startBroadcast();
         IProxy proxy = IProxy(
             DeployUtils.create2AndSave({
                 _save: artifacts,
@@ -426,11 +401,12 @@ contract Deploy is Deployer {
         );
         require(EIP1967Helper.getAdmin(address(proxy)) == _proxyOwner, "Deploy: EIP1967Proxy admin not set");
         addr_ = address(proxy);
+        vm.stopBroadcast();
     }
 
     /// @notice Get the DeployInput struct to use for testing
     function getDeployInput() public view returns (IOPContractsManager.DeployInput memory) {
-        string memory saltMixer = "salt mixer 1754661032";
+        string memory saltMixer = "salt mixer apertium1";
         return IOPContractsManager.DeployInput({
             roles: IOPContractsManager.Roles({
                 opChainProxyAdminOwner: cfg.finalSystemOwner(),
