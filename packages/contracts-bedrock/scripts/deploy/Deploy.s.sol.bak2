@@ -52,7 +52,7 @@ contract Deploy is Deployer {
 
     /// @notice Modifier that wraps a function in broadcasting.
     modifier broadcast() {
-        vm.startBroadcast(msg.sender);
+        vm.startBroadcast();
         _;
         vm.stopBroadcast();
     }

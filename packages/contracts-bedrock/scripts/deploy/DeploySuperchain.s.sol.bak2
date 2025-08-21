@@ -131,7 +131,7 @@ contract DeploySuperchain is Script {
         IProxyAdmin superchainProxyAdmin = _output.superchainProxyAdmin;
         ISuperchainConfig superchainConfigImpl = _output.superchainConfigImpl;
 
-        vm.startBroadcast(msg.sender);
+        vm.startBroadcast();
         ISuperchainConfig superchainConfigProxy = ISuperchainConfig(
             DeployUtils.create1({
                 _name: "Proxy",
@@ -159,7 +159,7 @@ contract DeploySuperchain is Script {
         IProxyAdmin superchainProxyAdmin = _output.superchainProxyAdmin;
         IProtocolVersions protocolVersionsImpl = _output.protocolVersionsImpl;
 
-        vm.startBroadcast(msg.sender);
+        vm.startBroadcast();
         IProtocolVersions protocolVersionsProxy = IProtocolVersions(
             DeployUtils.create1({
                 _name: "Proxy",
