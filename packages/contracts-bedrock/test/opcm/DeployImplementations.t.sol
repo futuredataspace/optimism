@@ -24,6 +24,7 @@ contract DeployImplementations_Test is Test {
     DeployImplementations deployImplementations;
 
     // Define default inputs for testing.
+    bytes32 constant SALT = bytes32(uint256(1));
     uint256 withdrawalDelaySeconds = 100;
     uint256 minProposalSizeBytes = 200;
     uint256 challengePeriodSeconds = 300;
@@ -112,21 +113,7 @@ contract DeployImplementations_Test is Test {
         vm.prank(address(superchainProxyAdmin));
         IProxy(payable(address(superchainConfigProxy))).upgradeTo(address(superchainConfigImpl));
 
-        DeployImplementations.Input memory input = DeployImplementations.Input(
-            salt,
-            _withdrawalDelaySeconds,
-            _minProposalSizeBytes,
-            uint256(_challengePeriodSeconds),
-            _proofMaturityDelaySeconds,
-            _disputeGameFinalityDelaySeconds,
-            StandardConstants.MIPS_VERSION, // mipsVersion
-            _l1ContractsRelease,
-            superchainConfigProxy,
-            protocolVersionsProxy,
-            superchainProxyAdmin,
-            upgradeController,
-            challenger
-        );
+        DeployImplementations.Input memory input = defaultInput();
 
         DeployImplementations.Output memory output = deployImplementations.run(input);
 
@@ -247,20 +234,20 @@ contract DeployImplementations_Test is Test {
     }
 
     function defaultInput() private view returns (DeployImplementations.Input memory input_) {
-        input_ = DeployImplementations.Input(
-            salt,
-            withdrawalDelaySeconds,
-            minProposalSizeBytes,
-            challengePeriodSeconds,
-            proofMaturityDelaySeconds,
-            disputeGameFinalityDelaySeconds,
-            StandardConstants.MIPS_VERSION, // mipsVersion
-            "dev-release", // l1ContractsRelease
-            superchainConfigProxy,
-            protocolVersionsProxy,
-            superchainProxyAdmin,
-            upgradeController,
-            challenger
-        );
+        input_ = DeployImplementations.Input({
+            salt: SALT,
+            withdrawalDelaySeconds: withdrawalDelaySeconds,
+            minProposalSizeBytes: minProposalSizeBytes,
+            challengePeriodSeconds: challengePeriodSeconds,
+            proofMaturityDelaySeconds: proofMaturityDelaySeconds,
+            disputeGameFinalityDelaySeconds: disputeGameFinalityDelaySeconds,
+            mipsVersion: StandardConstants.MIPS_VERSION,
+            l1ContractsRelease: "dev-release",
+            superchainConfigProxy: superchainConfigProxy,
+            protocolVersionsProxy: protocolVersionsProxy,
+            superchainProxyAdmin: superchainProxyAdmin,
+            upgradeController: upgradeController,
+            challenger: challenger
+        });
     }
 }
