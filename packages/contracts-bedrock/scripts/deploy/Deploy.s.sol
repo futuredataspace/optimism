@@ -256,7 +256,7 @@ contract Deploy is Deployer {
         require(_isInterop == cfg.useInterop(), "Deploy: Interop setting mismatch.");
 
         console.log("Deploying implementations");
-
+        bytes32 implSalt = _implSalt();
         DeployImplementations di = new DeployImplementations();
 
         ISuperchainConfig superchainConfigProxy = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
@@ -264,6 +264,7 @@ contract Deploy is Deployer {
 
         DeployImplementations.Output memory dio = di.run(
             DeployImplementations.Input({
+                salt: implSalt,
                 withdrawalDelaySeconds: cfg.faultGameWithdrawalDelay(),
                 minProposalSizeBytes: cfg.preimageOracleMinProposalSize(),
                 challengePeriodSeconds: cfg.preimageOracleChallengePeriod(),

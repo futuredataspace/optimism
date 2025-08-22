@@ -362,6 +362,7 @@ contract DeployOPChain_TestBase is Test {
 
         DeployImplementations.Output memory dio = deployImplementations.run(
             DeployImplementations.Input({
+                salt: bytes32(uint256(1)),
                 withdrawalDelaySeconds: withdrawalDelaySeconds,
                 minProposalSizeBytes: minProposalSizeBytes,
                 challengePeriodSeconds: challengePeriodSeconds,

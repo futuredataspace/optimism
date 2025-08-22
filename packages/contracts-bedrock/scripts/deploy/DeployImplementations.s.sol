@@ -41,6 +41,7 @@ import { ChainAssertions } from "scripts/deploy/ChainAssertions.sol";
 
 contract DeployImplementations is Script {
     struct Input {
+        bytes32 salt; // [新增] The create2 salt to be used when deploying the implementations.
         uint256 withdrawalDelaySeconds;
         uint256 minProposalSizeBytes;
         uint256 challengePeriodSeconds;
@@ -82,7 +83,7 @@ contract DeployImplementations is Script {
         IProtocolVersions protocolVersionsImpl;
     }
 
-    bytes32 internal _salt = DeployUtils.DEFAULT_SALT;
+    // bytes32 internal _salt = DeployUtils.DEFAULT_SALT; // [删除]
 
     // -------- Core Deployment Methods --------
 
@@ -90,19 +91,19 @@ contract DeployImplementations is Script {
         assertValidInput(_input);
 
         // Deploy the implementations.
-        deploySuperchainConfigImpl(output_);
-        deployProtocolVersionsImpl(output_);
-        deploySystemConfigImpl(output_);
-        deployL1CrossDomainMessengerImpl(output_);
-        deployL1ERC721BridgeImpl(output_);
-        deployL1StandardBridgeImpl(output_);
-        deployOptimismMintableERC20FactoryImpl(output_);
+        deploySuperchainConfigImpl(_input, output_);
+        deployProtocolVersionsImpl(_input, output_);
+        deploySystemConfigImpl(_input, output_);
+        deployL1CrossDomainMessengerImpl(_input, output_);
+        deployL1ERC721BridgeImpl(_input, output_);
+        deployL1StandardBridgeImpl(_input, output_);
+        deployOptimismMintableERC20FactoryImpl(_input, output_);
         deployOptimismPortalImpl(_input, output_);
-        deployETHLockboxImpl(output_);
+        deployETHLockboxImpl(_input, output_);
         deployDelayedWETHImpl(_input, output_);
         deployPreimageOracleSingleton(_input, output_);
         deployMipsSingleton(_input, output_);
-        deployDisputeGameFactoryImpl(output_);
+        deployDisputeGameFactoryImpl(_input, output_);
         deployAnchorStateRegistryImpl(_input, output_);
 
         // Deploy the OP Contracts Manager with the new implementations set.
@@ -140,11 +141,11 @@ contract DeployImplementations is Script {
             mipsImpl: address(_output.mipsSingleton)
         });
 
-        deployOPCMBPImplsContainer(_output, _blueprints, implementations);
-        deployOPCMGameTypeAdder(_output);
+        deployOPCMBPImplsContainer(_input, _output, _blueprints, implementations);
+        deployOPCMGameTypeAdder(_input, _output);
         deployOPCMDeployer(_input, _output);
-        deployOPCMUpgrader(_output);
-        deployOPCMInteropMigrator(_output);
+        deployOPCMUpgrader(_input, _output);
+        deployOPCMInteropMigrator(_input, _output);
         deployOPCMStandardValidator(_input, _output, implementations);
 
         // Semgrep rule will fail because the arguments are encoded inside of a separate function.
@@ -153,7 +154,7 @@ contract DeployImplementations is Script {
             DeployUtils.createDeterministic({
                 _name: "OPContractsManager",
                 _args: encodeOPCMConstructor(_l1ContractsRelease, _input, _output),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
 
@@ -203,22 +204,22 @@ contract DeployImplementations is Script {
         IOPContractsManager.Blueprints memory blueprints;
         vm.startBroadcast();
         address checkAddress;
-        (blueprints.addressManager, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("AddressManager"), _salt);
+        (blueprints.addressManager, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("AddressManager"), _input.salt);
         require(checkAddress == address(0), "OPCM-10");
-        (blueprints.proxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("Proxy"), _salt);
+        (blueprints.proxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("Proxy"), _input.salt);
         require(checkAddress == address(0), "OPCM-20");
-        (blueprints.proxyAdmin, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("ProxyAdmin"), _salt);
+        (blueprints.proxyAdmin, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("ProxyAdmin"), _input.salt);
         require(checkAddress == address(0), "OPCM-30");
-        (blueprints.l1ChugSplashProxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("L1ChugSplashProxy"), _salt);
+        (blueprints.l1ChugSplashProxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("L1ChugSplashProxy"), _input.salt);
         require(checkAddress == address(0), "OPCM-40");
-        (blueprints.resolvedDelegateProxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("ResolvedDelegateProxy"), _salt);
+        (blueprints.resolvedDelegateProxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("ResolvedDelegateProxy"), _input.salt);
         require(checkAddress == address(0), "OPCM-50");
         // The max initcode/runtimecode size is 48KB/24KB.
         // But for Blueprint, the initcode is stored as runtime code, that's why it's necessary to split into 2 parts.
-        (blueprints.permissionedDisputeGame1, blueprints.permissionedDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("PermissionedDisputeGame"), _salt);
-        (blueprints.permissionlessDisputeGame1, blueprints.permissionlessDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("FaultDisputeGame"), _salt);
-        (blueprints.superPermissionedDisputeGame1, blueprints.superPermissionedDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("SuperPermissionedDisputeGame"), _salt);
-        (blueprints.superPermissionlessDisputeGame1, blueprints.superPermissionlessDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("SuperFaultDisputeGame"), _salt);
+        (blueprints.permissionedDisputeGame1, blueprints.permissionedDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("PermissionedDisputeGame"), _input.salt);
+        (blueprints.permissionlessDisputeGame1, blueprints.permissionlessDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("FaultDisputeGame"), _input.salt);
+        (blueprints.superPermissionedDisputeGame1, blueprints.superPermissionedDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("SuperPermissionedDisputeGame"), _input.salt);
+        (blueprints.superPermissionlessDisputeGame1, blueprints.superPermissionlessDisputeGame2) = DeployUtils.createDeterministicBlueprint(vm.getCode("SuperFaultDisputeGame"), _input.salt);
         // forgefmt: disable-end
         vm.stopBroadcast();
 
@@ -230,96 +231,96 @@ contract DeployImplementations is Script {
 
     // --- Core Contracts ---
 
-    function deploySuperchainConfigImpl(Output memory _output) private {
+    function deploySuperchainConfigImpl(Input memory _input, Output memory _output) private {
         ISuperchainConfig impl = ISuperchainConfig(
             DeployUtils.createDeterministic({
                 _name: "SuperchainConfig",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(ISuperchainConfig.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "SuperchainConfigImpl");
         _output.superchainConfigImpl = impl;
     }
 
-    function deployProtocolVersionsImpl(Output memory _output) private {
+    function deployProtocolVersionsImpl(Input memory _input, Output memory _output) private {
         IProtocolVersions impl = IProtocolVersions(
             DeployUtils.createDeterministic({
                 _name: "ProtocolVersions",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IProtocolVersions.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "ProtocolVersionsImpl");
         _output.protocolVersionsImpl = impl;
     }
 
-    function deploySystemConfigImpl(Output memory _output) private {
+    function deploySystemConfigImpl(Input memory _input, Output memory _output) private {
         ISystemConfig impl = ISystemConfig(
             DeployUtils.createDeterministic({
                 _name: "SystemConfig",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(ISystemConfig.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "SystemConfigImpl");
         _output.systemConfigImpl = impl;
     }
 
-    function deployL1CrossDomainMessengerImpl(Output memory _output) private {
+    function deployL1CrossDomainMessengerImpl(Input memory _input, Output memory _output) private {
         IL1CrossDomainMessenger impl = IL1CrossDomainMessenger(
             DeployUtils.createDeterministic({
                 _name: "L1CrossDomainMessenger",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IL1CrossDomainMessenger.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "L1CrossDomainMessengerImpl");
         _output.l1CrossDomainMessengerImpl = impl;
     }
 
-    function deployL1ERC721BridgeImpl(Output memory _output) private {
+    function deployL1ERC721BridgeImpl(Input memory _input, Output memory _output) private {
         IL1ERC721Bridge impl = IL1ERC721Bridge(
             DeployUtils.createDeterministic({
                 _name: "L1ERC721Bridge",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IL1ERC721Bridge.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "L1ERC721BridgeImpl");
         _output.l1ERC721BridgeImpl = impl;
     }
 
-    function deployL1StandardBridgeImpl(Output memory _output) private {
+    function deployL1StandardBridgeImpl(Input memory _input, Output memory _output) private {
         IL1StandardBridge impl = IL1StandardBridge(
             DeployUtils.createDeterministic({
                 _name: "L1StandardBridge",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IL1StandardBridge.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "L1StandardBridgeImpl");
         _output.l1StandardBridgeImpl = impl;
     }
 
-    function deployOptimismMintableERC20FactoryImpl(Output memory _output) private {
+    function deployOptimismMintableERC20FactoryImpl(Input memory _input, Output memory _output) private {
         IOptimismMintableERC20Factory impl = IOptimismMintableERC20Factory(
             DeployUtils.createDeterministic({
                 _name: "OptimismMintableERC20Factory",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IOptimismMintableERC20Factory.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OptimismMintableERC20FactoryImpl");
         _output.optimismMintableERC20FactoryImpl = impl;
     }
 
-    function deployETHLockboxImpl(Output memory _output) private {
+    function deployETHLockboxImpl(Input memory _input, Output memory _output) private {
         IETHLockbox impl = IETHLockbox(
             DeployUtils.createDeterministic({
                 _name: "ETHLockbox",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IETHLockbox.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "ETHLockboxImpl");
@@ -371,7 +372,7 @@ contract DeployImplementations is Script {
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IOptimismPortal.__constructor__, (proofMaturityDelaySeconds))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OptimismPortalImpl");
@@ -384,7 +385,7 @@ contract DeployImplementations is Script {
             DeployUtils.createDeterministic({
                 _name: "DelayedWETH",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IDelayedWETH.__constructor__, (withdrawalDelaySeconds))),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "DelayedWETHImpl");
@@ -400,7 +401,7 @@ contract DeployImplementations is Script {
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IPreimageOracle.__constructor__, (minProposalSizeBytes, challengePeriodSeconds))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(singleton), "PreimageOracleSingleton");
@@ -422,19 +423,19 @@ contract DeployImplementations is Script {
             DeployUtils.createDeterministic({
                 _name: "MIPS64",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IMIPS2.__constructor__, (preimageOracle, mipsVersion))),
-                _salt: DeployUtils.DEFAULT_SALT
+                _salt: _input.salt
             })
         );
         vm.label(address(singleton), "MIPSSingleton");
         _output.mipsSingleton = singleton;
     }
 
-    function deployDisputeGameFactoryImpl(Output memory _output) private {
+    function deployDisputeGameFactoryImpl(Input memory _input, Output memory _output) private {
         IDisputeGameFactory impl = IDisputeGameFactory(
             DeployUtils.createDeterministic({
                 _name: "DisputeGameFactory",
                 _args: DeployUtils.encodeConstructor(abi.encodeCall(IDisputeGameFactory.__constructor__, ())),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "DisputeGameFactoryImpl");
@@ -449,7 +450,7 @@ contract DeployImplementations is Script {
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IAnchorStateRegistry.__constructor__, (disputeGameFinalityDelaySeconds))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "AnchorStateRegistryImpl");
@@ -457,6 +458,7 @@ contract DeployImplementations is Script {
     }
 
     function deployOPCMBPImplsContainer(
+        Input memory _input,
         Output memory _output,
         IOPContractsManager.Blueprints memory _blueprints,
         IOPContractsManager.Implementations memory _implementations
@@ -469,63 +471,63 @@ contract DeployImplementations is Script {
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IOPContractsManagerContractsContainer.__constructor__, (_blueprints, _implementations))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OPContractsManagerBPImplsContainerImpl");
         _output.opcmContractsContainer = impl;
     }
 
-    function deployOPCMGameTypeAdder(Output memory _output) private {
+    function deployOPCMGameTypeAdder(Input memory _input, Output memory _output) private {
         IOPContractsManagerGameTypeAdder impl = IOPContractsManagerGameTypeAdder(
             DeployUtils.createDeterministic({
                 _name: "OPContractsManager.sol:OPContractsManagerGameTypeAdder",
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IOPContractsManagerGameTypeAdder.__constructor__, (_output.opcmContractsContainer))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OPContractsManagerGameTypeAdderImpl");
         _output.opcmGameTypeAdder = impl;
     }
 
-    function deployOPCMDeployer(Input memory, Output memory _output) private {
+    function deployOPCMDeployer(Input memory _input, Output memory _output) private {
         IOPContractsManagerDeployer impl = IOPContractsManagerDeployer(
             DeployUtils.createDeterministic({
                 _name: "OPContractsManager.sol:OPContractsManagerDeployer",
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IOPContractsManagerDeployer.__constructor__, (_output.opcmContractsContainer))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OPContractsManagerDeployerImpl");
         _output.opcmDeployer = impl;
     }
 
-    function deployOPCMUpgrader(Output memory _output) private {
+    function deployOPCMUpgrader(Input memory _input, Output memory _output) private {
         IOPContractsManagerUpgrader impl = IOPContractsManagerUpgrader(
             DeployUtils.createDeterministic({
                 _name: "OPContractsManager.sol:OPContractsManagerUpgrader",
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IOPContractsManagerUpgrader.__constructor__, (_output.opcmContractsContainer))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OPContractsManagerUpgraderImpl");
         _output.opcmUpgrader = impl;
     }
 
-    function deployOPCMInteropMigrator(Output memory _output) private {
+    function deployOPCMInteropMigrator(Input memory _input, Output memory _output) private {
         IOPContractsManagerInteropMigrator impl = IOPContractsManagerInteropMigrator(
             DeployUtils.createDeterministic({
                 _name: "OPContractsManager.sol:OPContractsManagerInteropMigrator",
                 _args: DeployUtils.encodeConstructor(
                     abi.encodeCall(IOPContractsManagerInteropMigrator.__constructor__, (_output.opcmContractsContainer))
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OPContractsManagerInteropMigratorImpl");
@@ -567,7 +569,7 @@ contract DeployImplementations is Script {
                         )
                     )
                 ),
-                _salt: _salt
+                _salt: _input.salt
             })
         );
         vm.label(address(impl), "OPContractsManagerStandardValidatorImpl");
@@ -575,6 +577,7 @@ contract DeployImplementations is Script {
     }
 
     function assertValidInput(Input memory _input) private pure {
+        require(_input.salt != bytes32(0), "DeployImplementations: salt not set");
         require(_input.withdrawalDelaySeconds != 0, "DeployImplementations: withdrawalDelaySeconds not set");
         require(_input.minProposalSizeBytes != 0, "DeployImplementations: minProposalSizeBytes not set");
         require(_input.challengePeriodSeconds != 0, "DeployImplementations: challengePeriodSeconds not set");

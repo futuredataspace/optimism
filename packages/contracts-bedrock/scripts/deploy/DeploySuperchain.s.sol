@@ -60,7 +60,7 @@ contract DeploySuperchain is Script {
         function run(Input memory _input) public returns (Output memory output_) {
         // Convert the external Input to InternalInput
         InternalInput memory internalInput = toInternalInput(_input);
-        internalInput.deployer = 0x334f49d36d9A718977C377138D9d24097104AcD2; // Capture the true deployer l2_config.env
+        internalInput.deployer = 0x25c0163194215a5dfD61C462666fd6Fd742074b5; // Capture the true deployer l2_config.env
 
         // Make sure the inputs are all set
         assertValidInput(internalInput);

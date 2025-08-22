@@ -113,6 +113,7 @@ contract DeployImplementations_Test is Test {
         IProxy(payable(address(superchainConfigProxy))).upgradeTo(address(superchainConfigImpl));
 
         DeployImplementations.Input memory input = DeployImplementations.Input(
+            salt,
             _withdrawalDelaySeconds,
             _minProposalSizeBytes,
             uint256(_challengePeriodSeconds),
@@ -247,6 +248,7 @@ contract DeployImplementations_Test is Test {
 
     function defaultInput() private view returns (DeployImplementations.Input memory input_) {
         input_ = DeployImplementations.Input(
+            salt,
             withdrawalDelaySeconds,
             minProposalSizeBytes,
             challengePeriodSeconds,
