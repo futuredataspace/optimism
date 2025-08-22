@@ -1922,11 +1922,7 @@ contract OPContractsManager is ISemver {
     /// @param _input The deploy input parameters for the deployment.
     /// @return The deploy output values of the deployment.
     function deploy(DeployInput calldata _input) external virtual returns (DeployOutput memory) {
-        // This function is deprecated and should not be used.
-        // The logic has been moved to Deploy.s.sol to avoid inconsistencies
-        // between forge's simulation and onchain execution environments.
-        revert("OPContractsManager.deploy is deprecated");
-        // return opcmDeployer.deploy(_input, superchainConfig, msg.sender);
+        return opcmDeployer.deploy(_input, superchainConfig, msg.sender);
     }
 
     /// @notice Upgrades a set of chains to the latest implementation contracts

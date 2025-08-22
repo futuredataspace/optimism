@@ -210,7 +210,7 @@ contract Deploy is Deployer {
     ///         2. The ProtocolVersions contract
     function deploySuperchain() public {
         console.log("Setting up Superchain");
-        vm.startBroadcast();
+        //vm.startBroadcast();
         DeploySuperchain ds = new DeploySuperchain();
 
         // Run the deployment script.
@@ -246,7 +246,7 @@ contract Deploy is Deployer {
         // Finally replace the SuperchainConfig proxy with the implementation address and run assertions on it.
         contracts.SuperchainConfig = artifacts.mustGetAddress("SuperchainConfigImpl");
         ChainAssertions.checkSuperchainConfig({ _contracts: contracts, _cfg: cfg, _isProxy: false });
-        vm.stopBroadcast();
+        //vm.stopBroadcast();
     }
 
     /// @notice Deploy all of the implementations
@@ -256,7 +256,7 @@ contract Deploy is Deployer {
         require(_isInterop == cfg.useInterop(), "Deploy: Interop setting mismatch.");
 
         console.log("Deploying implementations");
-
+        bytes32 implSalt = _implSalt();
         DeployImplementations di = new DeployImplementations();
 
         ISuperchainConfig superchainConfigProxy = ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy"));
@@ -264,6 +264,7 @@ contract Deploy is Deployer {
 
         DeployImplementations.Output memory dio = di.run(
             DeployImplementations.Input({
+                salt: implSalt,
                 withdrawalDelaySeconds: cfg.faultGameWithdrawalDelay(),
                 minProposalSizeBytes: cfg.preimageOracleMinProposalSize(),
                 challengePeriodSeconds: cfg.preimageOracleChallengePeriod(),
@@ -379,16 +380,11 @@ contract Deploy is Deployer {
         );
 
         vm.startBroadcast();
-        address delayedWETHPermissionlessGameProxy =
-            deployERC1967ProxyWithOwner("DelayedWETHProxy", address(deployOutput.opChainProxyAdmin));
+        address payable delayedWETHPermissionlessGameProxy = payable(
+            deployERC1967ProxyWithOwner("DelayedWETHProxy", address(deployOutput.opChainProxyAdmin))
+        );
         vm.stopBroadcast();
 
-        // We do not want to broadcast from the ProxyAdmin, it has no private key.
-        // vm.broadcast(address(deployOutput.opChainProxyAdmin));
-
-        // To authorize the upgrade, we must switch the msg.sender to be the owner of the
-        // opChainProxyAdmin contract. The owner is the `finalSystemOwner` from the config.
-        // vm.prank() allows us to do this for the next single call.
         vm.startBroadcast();
         deployOutput.opChainProxyAdmin.upgradeAndCall(
             payable(delayedWETHPermissionlessGameProxy),

@@ -36,6 +36,19 @@ import { IMIPS } from "interfaces/cannon/IMIPS.sol";
 import { IPreimageOracle } from "interfaces/cannon/IPreimageOracle.sol";
 import { IProtocolVersions } from "interfaces/L1/IProtocolVersions.sol";
 import { IL1CrossDomainMessenger } from "interfaces/L1/IL1CrossDomainMessenger.sol";
+import { IAddressManager } from "interfaces/L1/IAddressManager.sol";
+import { IResourceMetering } from "interfaces/L1/IResourceMetering.sol";
+import { ISystemConfig } from "interfaces/L1/ISystemConfig.sol";
+import { IOptimismPortal } from "interfaces/L1/IOptimismPortal.sol";
+import { IFaultDisputeGame } from "interfaces/L1/IFaultDisputeGame.sol";
+import { IBigStepper } from "interfaces/cannon/IBigStepper.sol";
+import { IL1ERC721Bridge } from "interfaces/L1/IL1ERC721Bridge.sol";
+import { IL1StandardBridge } from "interfaces/L1/IL1StandardBridge.sol";
+import { IETHLockbox } from "interfaces/L1/IETHLockbox.sol";
+import { IOptimismMintableERC20Factory } from "interfaces/L1/IOptimismMintableERC20Factory.sol";
+import { IPermissionedDisputeGame } from "interfaces/L1/IPermissionedDisputeGame.sol";
+import { IDisputeGame } from "interfaces/dispute/IDisputeGame.sol";
+import { Constants } from "scripts/libraries/Constants.sol";
 
 /// @title Deploy
 /// @notice Script used to deploy a bedrock system. The entire system is deployed within the `run` function.
@@ -392,6 +405,308 @@ contract Deploy is Deployer {
             abi.encodeCall(IDelayedWETH.initialize, (deployOutput.systemConfigProxy))
         );
         vm.stopBroadcast();
+    }
+
+    /// @notice Deploys the OP Chain contracts.
+    function deployOpChain(DeployImplementations.Output memory _impls) internal returns (DeployOPChain.Output memory output_) {
+        // Here, we'll re-implement the logic from OPContractsManagerDeployer.sol directly
+        // to avoid inconsistencies between forge's simulation and onchain execution.
+        
+        // Use a consistent salt for all CREATE2 deployments in this chain deployment.
+        bytes32 opChainSalt = keccak256(abi.encode(config.l2ChainId(), config.saltMixer()));
+
+        // =================================================================================
+        // 1. Deploy Singleton Contracts for the OP Chain (ProxyAdmin, AddressManager)
+        // =================================================================================
+        
+        // The ProxyAdmin is the owner of all proxies for the chain. We temporarily set the owner to
+        // this script, and then transfer ownership to the specified owner at the end of deployment.
+        vm.startBroadcast();
+        output_.proxyAdmin = IProxyAdmin(
+            DeployUtils.create2({
+                _name: "ProxyAdmin",
+                _args: abi.encode(address(this)),
+                _salt: keccak256(abi.encode(opChainSalt, "ProxyAdmin"))
+            })
+        );
+        vm.stopBroadcast();
+        artifacts.save("ProxyAdmin", address(output_.proxyAdmin));
+
+        // The AddressManager is used for the legacy ResolvedDelegateProxy.
+        vm.startBroadcast();
+        output_.addressManager = IAddressManager(
+            DeployUtils.create2({
+                _name: "AddressManager",
+                _args: abi.encode(),
+                _salt: keccak256(abi.encode(opChainSalt, "AddressManager"))
+            })
+        );
+        vm.stopBroadcast();
+        artifacts.save("AddressManager", address(output_.addressManager));
+        
+        // Set the AddressManager on the ProxyAdmin and transfer ownership of AddressManager.
+        vm.startBroadcast();
+        output_.proxyAdmin.setAddressManager(output_.addressManager);
+        output_.addressManager.transferOwnership(address(output_.proxyAdmin));
+        vm.stopBroadcast();
+
+        // =================================================================================
+        // 2. Deploy Proxy Contracts (ERC-1967 and Legacy)
+        // =================================================================================
+        
+        // A helper function will be used to deploy ERC-1967 proxies to avoid code duplication.
+        
+        // Deploy ERC-1967 proxied contracts.
+        output_.l1ERC721BridgeProxy = IL1ERC721Bridge(
+            _deployERC1967Proxy(opChainSalt, "L1ERC721Bridge", output_.proxyAdmin)
+        );
+        output_.optimismPortalProxy = IOptimismPortal(
+            payable(_deployERC1967Proxy(opChainSalt, "OptimismPortal", output_.proxyAdmin))
+        );
+        output_.ethLockboxProxy = IETHLockbox(
+            _deployERC1967Proxy(opChainSalt, "ETHLockbox", output_.proxyAdmin)
+        );
+        output_.systemConfigProxy = ISystemConfig(
+            _deployERC1967Proxy(opChainSalt, "SystemConfig", output_.proxyAdmin)
+        );
+        output_.optimismMintableERC20FactoryProxy = IOptimismMintableERC20Factory(
+            _deployERC1967Proxy(opChainSalt, "OptimismMintableERC20Factory", output_.proxyAdmin)
+        );
+        output_.disputeGameFactoryProxy = IDisputeGameFactory(
+            _deployERC1967Proxy(opChainSalt, "DisputeGameFactory", output_.proxyAdmin)
+        );
+        output_.anchorStateRegistryProxy = IAnchorStateRegistry(
+            _deployERC1967Proxy(opChainSalt, "AnchorStateRegistry", output_.proxyAdmin)
+        );
+        
+        // Deploy legacy proxied contracts.
+        vm.startBroadcast();
+        output_.l1StandardBridgeProxy = IL1StandardBridge(
+            payable(
+                DeployUtils.create2({
+                    _name: "L1ChugSplashProxy",
+                    _args: abi.encode(output_.proxyAdmin),
+                    _salt: keccak256(abi.encode(opChainSalt, "L1StandardBridge"))
+                })
+            )
+        );
+        vm.stopBroadcast();
+        artifacts.save("L1StandardBridgeProxy", address(output_.l1StandardBridgeProxy));
+        
+        string memory cdmContractName = "OVM_L1CrossDomainMessenger";
+        vm.startBroadcast();
+        output_.l1CrossDomainMessengerProxy = IL1CrossDomainMessenger(
+            DeployUtils.create2({
+                _name: "ResolvedDelegateProxy",
+                _args: abi.encode(output_.addressManager, cdmContractName),
+                _salt: keccak256(abi.encode(opChainSalt, "L1CrossDomainMessenger"))
+            })
+        );
+        vm.stopBroadcast();
+        artifacts.save("L1CrossDomainMessengerProxy", address(output_.l1CrossDomainMessengerProxy));
+        
+        vm.startBroadcast();
+        output_.proxyAdmin.setProxyType(address(output_.l1StandardBridgeProxy), IProxyAdmin.ProxyType.CHUGSPLASH);
+        output_.proxyAdmin.setProxyType(address(output_.l1CrossDomainMessengerProxy), IProxyAdmin.ProxyType.RESOLVED);
+        output_.proxyAdmin.setImplementationName(address(output_.l1CrossDomainMessengerProxy), cdmContractName);
+        vm.stopBroadcast();
+
+        // =================================================================================
+        // 3. Deploy Dispute Game Contracts
+        // =================================================================================
+        
+        output_.delayedWETHPermissionedGameProxy = IDelayedWETH(
+            payable(_deployERC1967Proxy(opChainSalt, "DelayedWETHPermissionedGame", output_.proxyAdmin))
+        );
+
+        bytes memory permissionedGameConstructorArgs = abi.encode(
+            IFaultDisputeGame.GameConstructorParams({
+                gameType: GameTypes.PERMISSIONED_CANNON,
+                absolutePrestate: config.disputeAbsolutePrestate(),
+                maxGameDepth: config.disputeMaxGameDepth(),
+                splitDepth: config.disputeSplitDepth(),
+                clockExtension: config.disputeClockExtension(),
+                maxClockDuration: config.disputeMaxClockDuration(),
+                vm: IBigStepper(_impls.mipsSingleton),
+                weth: IDelayedWETH(payable(address(output_.delayedWETHPermissionedGameProxy))),
+                anchorStateRegistry: IAnchorStateRegistry(address(output_.anchorStateRegistryProxy)),
+                l2ChainId: config.l2ChainId()
+            }),
+            config.proposer(),
+            config.challenger()
+        );
+        
+        vm.startBroadcast();
+        output_.permissionedDisputeGame = IPermissionedDisputeGame(
+            DeployUtils.create2({
+                _name: "PermissionedDisputeGame",
+                _args: permissionedGameConstructorArgs,
+                _salt: keccak256(abi.encode(opChainSalt, "PermissionedDisputeGame"))
+            })
+        );
+        vm.stopBroadcast();
+        artifacts.save("PermissionedDisputeGame", address(output_.permissionedDisputeGame));
+
+        // =================================================================================
+        // 4. Set and Initialize Proxy Implementations
+        // =================================================================================
+        
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.l1ERC721BridgeProxy), _impls.l1ERC721BridgeImpl,
+            abi.encodeCall(IL1ERC721Bridge.initialize, (output_.l1CrossDomainMessengerProxy, output_.systemConfigProxy))
+        );
+        
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.optimismPortalProxy), _impls.optimismPortalImpl,
+            abi.encodeCall(IOptimismPortal.initialize, (output_.systemConfigProxy, output_.anchorStateRegistryProxy, output_.ethLockboxProxy))
+        );
+
+        // Initialize the SystemConfig before the ETHLockbox
+        (IResourceMetering.ResourceConfig memory resourceConfig, ISystemConfig.Addresses memory opChainAddrs) = _defaultSystemConfigParams(output_);
+        bytes memory systemConfigInitData = abi.encodeCall(
+            ISystemConfig.initialize,
+            (
+                config.systemConfigOwner(),
+                config.basefeeScalar(),
+                config.blobBasefeeScalar(),
+                bytes32(uint256(uint160(config.batcher()))), // batcherHash
+                config.gasLimit(),
+                config.unsafeBlockSigner(),
+                resourceConfig,
+                config.batchInbox(),
+                opChainAddrs,
+                config.l2ChainId(),
+                superchainConfig
+            )
+        );
+        _upgradeAndCall(output_.proxyAdmin, address(output_.systemConfigProxy), _impls.systemConfigImpl, systemConfigInitData);
+
+        // Initialize the ETHLockbox.
+        IOptimismPortal[] memory portals = new IOptimismPortal[](1);
+        portals[0] = output_.optimismPortalProxy;
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.ethLockboxProxy), _impls.ethLockboxImpl,
+            abi.encodeCall(IETHLockbox.initialize, (output_.systemConfigProxy, portals))
+        );
+
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.optimismMintableERC20FactoryProxy), _impls.optimismMintableERC20FactoryImpl,
+            abi.encodeCall(IOptimismMintableERC20Factory.initialize, (address(output_.l1StandardBridgeProxy)))
+        );
+        
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.l1CrossDomainMessengerProxy), _impls.l1CrossDomainMessengerImpl,
+            abi.encodeCall(IL1CrossDomainMessenger.initialize, (output_.systemConfigProxy, output_.optimismPortalProxy))
+        );
+
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.l1StandardBridgeProxy), _impls.l1StandardBridgeImpl,
+            abi.encodeCall(IL1StandardBridge.initialize, (output_.l1CrossDomainMessengerProxy, output_.systemConfigProxy))
+        );
+        
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.delayedWETHPermissionedGameProxy), _impls.delayedWETHImpl,
+            abi.encodeCall(IDelayedWETH.initialize, (output_.systemConfigProxy))
+        );
+
+        // We set the initial owner to this contract, set game implementations, then transfer ownership.
+        _upgradeAndCall(
+            output_.proxyAdmin, address(output_.disputeGameFactoryProxy), _impls.disputeGameFactoryImpl,
+            abi.encodeCall(IDisputeGameFactory.initialize, (address(this)))
+        );
+        vm.startBroadcast();
+        output_.disputeGameFactoryProxy.setImplementation(
+            GameTypes.PERMISSIONED_CANNON,
+            IDisputeGame(address(output_.permissionedDisputeGame))
+        );
+        output_.disputeGameFactoryProxy.transferOwnership(config.opChainProxyAdminOwner());
+        vm.stopBroadcast();
+        
+        bytes memory anchorStateRegistryInitData = abi.encodeCall(
+            IAnchorStateRegistry.initialize,
+            (
+                output_.systemConfigProxy,
+                output_.disputeGameFactoryProxy,
+                abi.decode(config.startingAnchorRoot(), (Proposal)),
+                GameTypes.PERMISSIONED_CANNON
+            )
+        );
+        _upgradeAndCall(output_.proxyAdmin, address(output_.anchorStateRegistryProxy), _impls.anchorStateRegistryImpl, anchorStateRegistryInitData);
+        
+        // =================================================================================
+        // 5. Finalize Deployment (Transfer Ownership)
+        // =================================================================================
+        
+        // Transfer ownership of the ProxyAdmin from this contract to the specified owner.
+        vm.startBroadcast();
+        output_.proxyAdmin.transferOwnership(config.opChainProxyAdminOwner());
+        vm.stopBroadcast();
+    }
+
+    /// @notice Helper function for deploying an ERC1967 proxy.
+    function _deployERC1967Proxy(bytes32 _salt, string memory _name, IProxyAdmin _admin) private returns (address) {
+        vm.startBroadcast();
+        address proxy = DeployUtils.create2({
+            _name: "Proxy",
+            _args: abi.encode(_admin),
+            _salt: keccak256(abi.encode(_salt, _name))
+        });
+        vm.stopBroadcast();
+        artifacts.save(string.concat(_name, "Proxy"), proxy);
+        return proxy;
+    }
+
+    /// @notice Helper function for upgrading a proxy and calling its initializer.
+    function _upgradeAndCall(IProxyAdmin _admin, address _proxy, address _impl, bytes memory _data) private {
+        vm.startBroadcast();
+        _admin.upgradeAndCall(payable(_proxy), _impl, _data);
+        vm.stopBroadcast();
+    }
+    
+    /// @notice Helper function to get default SystemConfig params.
+    function _defaultSystemConfigParams(DeployOPChain.Output memory _output)
+        private
+        view
+        returns (IResourceMetering.ResourceConfig memory resourceConfig_, ISystemConfig.Addresses memory opChainAddrs_)
+    {
+        resourceConfig_ = Constants.DEFAULT_RESOURCE_CONFIG();
+
+        opChainAddrs_ = ISystemConfig.Addresses({
+            l1CrossDomainMessenger: address(_output.l1CrossDomainMessengerProxy),
+            l1ERC721Bridge: address(_output.l1ERC721BridgeProxy),
+            l1StandardBridge: address(_output.l1StandardBridgeProxy),
+            optimismPortal: address(_output.optimismPortalProxy),
+            optimismMintableERC20Factory: address(_output.optimismMintableERC20FactoryProxy)
+        });
+    }
+
+    /// @notice Deploys the Alt-DA contracts if Alt-DA is enabled.
+    function deployAltDA() internal {
+        if (!config.useAltDA()) {
+            return;
+        }
+
+        bytes32 typeHash = keccak256(bytes(config.daCommitmentType()));
+        bytes32 keccakHash = keccak256(bytes("KeccakCommitment"));
+        if (typeHash == keccakHash) {
+            console.log("Deploying OP AltDA");
+
+            DeployAltDA da = new DeployAltDA();
+            DeployAltDA.Input memory dii = DeployAltDA.Input({
+                salt: _implSalt(),
+                proxyAdmin: IProxyAdmin(artifacts.mustGetAddress("ProxyAdmin")),
+                challengeContractOwner: cfg.finalSystemOwner(),
+                challengeWindow: cfg.daChallengeWindow(),
+                resolveWindow: cfg.daResolveWindow(),
+                bondSize: cfg.daBondSize(),
+                resolverRefundPercentage: cfg.daResolverRefundPercentage()
+            });
+
+            DeployAltDA.Output memory dio = da.run(dii);
+
+            artifacts.save("DataAvailabilityChallengeProxy", address(dio.dataAvailabilityChallengeProxy));
+            artifacts.save("DataAvailabilityChallengeImpl", address(dio.dataAvailabilityChallengeImpl));
+        }
     }
 
     function _hasCode(address a) internal view returns (bool) {
