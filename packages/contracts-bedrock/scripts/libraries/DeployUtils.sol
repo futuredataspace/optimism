@@ -22,7 +22,7 @@ import { IReinitializableBase } from "interfaces/universal/IReinitializableBase.
 library DeployUtils {
     Vm internal constant vm = Vm(address(uint160(uint256(keccak256("hevm cheat code")))));
 
-    bytes32 internal constant DEFAULT_SALT = keccak256("op-stack-contract-impls-salt-v0");
+    bytes32 internal constant DEFAULT_SALT = keccak256("apertium-l2-salt-v0");
 
     /// @notice Deploys a contract with the given name and arguments via CREATE.
     /// @param _name Name of the contract to deploy.
