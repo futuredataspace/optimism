@@ -210,7 +210,7 @@ contract Deploy is Deployer {
     ///         2. The ProtocolVersions contract
     function deploySuperchain() public {
         console.log("Setting up Superchain");
-        vm.startBroadcast();
+        //vm.startBroadcast();
         DeploySuperchain ds = new DeploySuperchain();
 
         // Run the deployment script.
@@ -246,7 +246,7 @@ contract Deploy is Deployer {
         // Finally replace the SuperchainConfig proxy with the implementation address and run assertions on it.
         contracts.SuperchainConfig = artifacts.mustGetAddress("SuperchainConfigImpl");
         ChainAssertions.checkSuperchainConfig({ _contracts: contracts, _cfg: cfg, _isProxy: false });
-        vm.stopBroadcast();
+        //vm.stopBroadcast();
     }
 
     /// @notice Deploy all of the implementations
@@ -256,7 +256,7 @@ contract Deploy is Deployer {
         require(_isInterop == cfg.useInterop(), "Deploy: Interop setting mismatch.");
 
         console.log("Deploying implementations");
-        vm.startBroadcast();
+        //vm.startBroadcast();
         bytes32 implSalt = _implSalt();
         DeployImplementations di = new DeployImplementations();
 
@@ -327,7 +327,7 @@ contract Deploy is Deployer {
             _superchainProxyAdmin: superchainProxyAdmin
         });
         ChainAssertions.checkSystemConfig({ _contracts: impls, _cfg: cfg, _isProxy: false });
-        vm.stopBroadcast();
+        //vm.stopBroadcast();
     }
 
     /// @notice Deploy all of the OP Chain specific contracts
@@ -382,8 +382,9 @@ contract Deploy is Deployer {
         );
 
         vm.startBroadcast();
+        string memory uniqueProxyName = string(abi.encodePacked("ApertiumL1PermissionlessDelayedWETHProxy", Strings.toString(block.timestamp)));
         address payable delayedWETHPermissionlessGameProxy = payable(
-            deployERC1967ProxyWithOwner("PermissionlessDelayedWETHProxy", address(deployOutput.opChainProxyAdmin))
+            deployERC1967ProxyWithOwner(uniqueProxyName, address(deployOutput.opChainProxyAdmin))
         );
         vm.stopBroadcast();
 
