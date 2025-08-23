@@ -115,6 +115,9 @@ func L1VersionsFor(chainID uint64) (validation.Versions, error) {
 		return validation.StandardVersionsMainnet, nil
 	case 11155111:
 		return validation.StandardVersionsSepolia, nil
+	// [MODIFIED] Add support for Holesky testnet
+	case 17000:
+		return validation.Versions{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported chain ID: %d", chainID)
 	}
