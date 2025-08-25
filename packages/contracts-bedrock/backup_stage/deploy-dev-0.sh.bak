@@ -1,0 +1,298 @@
+#!/usr/bin/env bash
+set -eEuo pipefail
+
+# =================================================================
+# Apertium L2 - deploy-dev-0.sh (Hardened)
+# - L1 部署 + 链上校验 + 生成 L2 genesis/rollup
+# - 非交互广播 (--non-interactive)
+# - 严禁在此脚本内触发 forge update / git submodule 变更
+# =================================================================
+
+export PATH="$HOME/.foundry/bin:$PATH"
+export FOUNDRY_IS_CI=1
+
+# ---- 路径 & 文件 ----
+CONFIG_DIR="config"
+L2_ENV_FILE="$CONFIG_DIR/l2_config.env"
+DEPLOY_CONFIG_TEMPLATE_FILE="config/deploy-config-holesky-new.json"
+
+GENERATED_DIR="generated"
+DEPLOY_CONFIG_PATH="$(pwd)/$GENERATED_DIR/deploy-config-populated.json"
+export DEPLOY_CONFIG_PATH
+
+BEDROCK_DIR="optimism/packages/contracts-bedrock"
+DEPLOY_SCRIPT_REL="scripts/deploy/Deploy.s.sol:Deploy"
+FOUNDRY_TOML="$BEDROCK_DIR/foundry.toml"
+
+# ---- 输出 ----
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+log_info()    { echo -e "${BLUE}INFO:${NC} $*"; }
+log_success() { echo -e "${GREEN}✅ SUCCESS:${NC} $*"; }
+log_warning() { echo -e "${YELLOW}⚠️  WARNING:${NC} $*"; }
+log_error()   { echo -e "${RED}❌ ERROR:${NC} $*"; exit 1; }
+trap 'log_error "Script failed at line $LINENO. Check logs for details."' ERR
+
+# ---- utils ----
+has_code() { local c; c=$(cast code "$1" --rpc-url "$L1_RPC_URL" 2>/dev/null || echo "0x"); [[ "$c" != "0x" && -n "$c" ]]; }
+get_balance_wei() { cast balance "$1" --rpc-url "$L1_RPC_URL" 2>/dev/null || echo "0"; }
+fmt_eth() { python3 -c "import sys, decimal as d; print(f'{d.Decimal(sys.argv[1]) / d.Decimal(10**18):.12f}')" "$1"; }
+
+# =========================
+# 预检
+# =========================
+check_prerequisites() {
+  log_info "Checking prerequisites..."
+  for cmd in go jq git curl forge cast python3 wget; do  # 添加 wget 用于下载 binary
+    command -v "$cmd" &>/dev/null || log_error "Prerequisite '$cmd' not found. Please install it."
+  done
+  mkdir -p "$GENERATED_DIR"
+  log_success "All prerequisites met."
+}
+
+# =========================
+# STAGE 1: 准备 L1 配置
+# =========================
+stage_prepare_l1_configs() {
+  log_info "STAGE 1: Preparing L1 Deployment Configuration..."
+
+  [[ -f "$L2_ENV_FILE" ]] || log_error "L2 env file '$L2_ENV_FILE' not found."
+  # shellcheck disable=SC1090
+  source "$L2_ENV_FILE"
+
+  REQUIRED_VARS=(
+    "ADDRESS_ADMIN_AND_DEPLOYER"
+    "ADDRESS_SUPERCHAIN_CONFIG_GUARDIAN"
+    "ADDRESS_P2P_SEQUENCER"
+    "ADDRESS_BATCHER"
+    "ADDRESS_SEQUENCER"
+    "ADDRESS_CHALLENGER"
+    "ADDRESS_TREASURY"
+    "ADDRESS_UNSAFE_BLOCK_SIGNER"
+    "L2_CHAIN_ID"
+    "BASE_FEE_SCALAR"
+    "BLOB_BASE_FEE_SCALAR"
+    "PRIVATE_KEY_ADMIN_AND_DEPLOYER"
+    "L1_RPC_URL"
+  )
+  for var in "${REQUIRED_VARS[@]}"; do
+    [[ -n "${!var}" ]] || log_error "Required variable '$var' is not set in '$L2_ENV_FILE'."
+  done
+  [[ -f "$DEPLOY_CONFIG_TEMPLATE_FILE" ]] || log_error "Deploy config template not found at '$DEPLOY_CONFIG_TEMPLATE_FILE'."
+
+  log_info "Fetching and verifying L1 Chain ID from RPC..."
+  L1_CHAIN_ID=$(curl -s -X POST -H "Content-Type: application/json" \
+    --data '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id:1}' "$L1_RPC_URL" \
+    | jq -r .result | xargs printf "%d")
+  [[ "$L1_CHAIN_ID" -eq 17000 ]] || log_error "L1_RPC_URL is not Holesky (17000), got $L1_CHAIN_ID."
+  log_success "L1 Chain ID is $L1_CHAIN_ID."
+
+  log_info "Performing pre-flight checks on environment variables..."
+  [[ "$ADDRESS_UNSAFE_BLOCK_SIGNER" =~ ^0x[a-fA-F0-9]{40}$ ]] || log_error "ADDRESS_UNSAFE_BLOCK_SIGNER is not a valid address."
+  [[ "$ADDRESS_UNSAFE_BLOCK_SIGNER" != "0x0000000000000000000000000000000000000000" ]] || log_error "ADDRESS_UNSAFE_BLOCK_SIGNER cannot be zero address."
+  has_code "$ADDRESS_UNSAFE_BLOCK_SIGNER" && log_error "ADDRESS_UNSAFE_BLOCK_SIGNER must be an EOA (has code on L1)."
+  log_success "Pre-flight checks passed."
+
+  mkdir -p "$GENERATED_DIR"
+
+  local SALT_MIXER="salt mixer $(date +%s)"
+  # [新增] 创建一个随机的 implSalt 来确保 CREATE2 地址的唯一性，避免重部署冲突
+  local IMPL_SALT="apertium-l2-salt-$(date +%s)-$(openssl rand -hex 4)"
+  export IMPL_SALT # 导出为环境变量，以便 forge script 可以读取
+  log_info "Generated unique salt for this deployment: $IMPL_SALT"
+
+  log_info "Populating deploy config..."
+
+  # 生成 deploy-config-populated.json 的 jq 片段（覆盖/新增字段）
+  jq \
+    --arg ADDRESS_ADMIN_AND_DEPLOYER "$ADDRESS_ADMIN_AND_DEPLOYER" \
+    --arg ADDRESS_SUPERCHAIN_CONFIG_GUARDIAN "$ADDRESS_SUPERCHAIN_CONFIG_GUARDIAN" \
+    --arg ADDRESS_P2P_SEQUENCER "$ADDRESS_P2P_SEQUENCER" \
+    --arg ADDRESS_BATCHER "$ADDRESS_BATCHER" \
+    --arg ADDRESS_SEQUENCER "$ADDRESS_SEQUENCER" \
+    --arg ADDRESS_CHALLENGER "$ADDRESS_CHALLENGER" \
+    --arg ADDRESS_TREASURY "$ADDRESS_TREASURY" \
+    --arg ADDRESS_UNSAFE_BLOCK_SIGNER "$ADDRESS_UNSAFE_BLOCK_SIGNER" \
+    --argjson l1ChainID "${L1_CHAIN_ID}" \
+    --argjson l2ChainID "${L2_CHAIN_ID}" \
+    --argjson basefeeScalar "${BASE_FEE_SCALAR}" \
+    --argjson blobBasefeeScalar "${BLOB_BASE_FEE_SCALAR}" \
+    --argjson required_proto 1 \
+    --argjson recommended_proto 1 \
+    --arg saltMixer "salt mixer $(date +%s)" \
+    --arg implSalt "$IMPL_SALT" \
+    --argjson gasLimit 30000000 \
+    '
+      .enableGovernance                 = false |
+      .paused                           = true  |
+      .finalSystemOwner                 = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .proxyAdminOwner                  = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .governanceTokenOwner             = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .protocolVersionsOwner            = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .superchainProxyAdminOwner        = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .upgradeController                = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .challenger                       = $ADDRESS_ADMIN_AND_DEPLOYER |
+      .superchainConfigGuardian         = $ADDRESS_SUPERCHAIN_CONFIG_GUARDIAN |
+      .p2pSequencerAddress              = $ADDRESS_P2P_SEQUENCER |
+      .batchSenderAddress               = $ADDRESS_BATCHER |
+      .l2OutputOracleProposer           = $ADDRESS_SEQUENCER |
+      .l2OutputOracleChallenger         = $ADDRESS_CHALLENGER |
+      .baseFeeVaultRecipient            = $ADDRESS_TREASURY |
+      .l1FeeVaultRecipient              = $ADDRESS_TREASURY |
+      .sequencerFeeVaultRecipient       = $ADDRESS_TREASURY |
+      .unsafeBlockSigner                = $ADDRESS_UNSAFE_BLOCK_SIGNER |
+      .l1ChainID                        = $l1ChainID |
+      .l2ChainID                        = $l2ChainID |
+      .basefeeScalar                    = $basefeeScalar |
+      .blobBasefeeScalar                = $blobBasefeeScalar |
+      .gasPriceOracleBaseFeeScalar      = $basefeeScalar |
+      .gasPriceOracleBlobBaseFeeScalar  = $blobBasefeeScalar |
+      .requiredProtocolVersion          = $required_proto |
+      .recommendedProtocolVersion       = $recommended_proto |
+      .l1StartingBlockTag               = "latest" |
+      .saltMixer                        = $saltMixer |
+      .implSalt                         = $implSalt |
+      .gasLimit                         = $gasLimit
+    ' \
+    "$DEPLOY_CONFIG_TEMPLATE_FILE" > "$DEPLOY_CONFIG_PATH"
+
+
+  #jq '.enableGovernance, .paused, .gasPriceOracleBaseFeeScalar, .gasPriceOracleBlobBaseFeeScalar, .saltMixer' "$DEPLOY_CONFIG_PATH"
+
+  echo "required=";     jq '.requiredProtocolVersion, (.requiredProtocolVersion|type)' "$DEPLOY_CONFIG_PATH"
+  echo "recommended=";  jq '.recommendedProtocolVersion, (.recommendedProtocolVersion|type)' "$DEPLOY_CONFIG_PATH"
+
+  log_info "Running post-generation validations on generated config..."
+  validate_populated_config() {
+    local config_path="$1"
+    jq -e '(.requiredProtocolVersion|type=="number" and .>=1) and (.recommendedProtocolVersion|type=="number" and .>=1)' "$config_path" >/dev/null \
+      || { log_error "Post-validation failed: protocol versions must be numeric (e.g., 1)."; return 1; }
+    local validation_query
+    validation_query=$(cat <<'JQ'
+      def isNonZeroAddr: type == "string" and test("^0x[0-9a-fA-F]{40}$") and . != "0x0000000000000000000000000000000000000000";
+      [
+        .unsafeBlockSigner,
+        .finalSystemOwner, .proxyAdminOwner, .governanceTokenOwner, .superchainConfigGuardian,
+        .p2pSequencerAddress, .batchSenderAddress,
+        .l2OutputOracleProposer, .l2OutputOracleChallenger,
+        .baseFeeVaultRecipient, .l1FeeVaultRecipient, .sequencerFeeVaultRecipient
+      ] | all(. | isNonZeroAddr)
+JQ
+)
+    jq -e "$validation_query" "$config_path" >/dev/null \
+      || { log_error "Post-validation failed: One or more address fields are null/empty/zero/invalid."; return 1; }
+    jq -e '(.l1ChainID|type=="number" and .>0) and (.l2ChainID|type=="number" and .>0) and (.basefeeScalar|type=="number" and .>0) and (.blobBasefeeScalar|type=="number" and .>0)' "$config_path" >/dev/null \
+      || { log_error "Post-validation failed: l1ChainID/l2ChainID/basefeeScalar/blobBasefeeScalar must be positive numbers."; return 1; }
+    ! jq -e 'tostring | contains("__")' "$config_path" >/dev/null \
+      || { log_error "Post-validation failed: Found '__' placeholder(s) in config."; return 1; }
+    return 0
+  }
+  validate_populated_config "$DEPLOY_CONFIG_PATH"
+
+  log_info "Config summary for visual confirmation:"
+  jq '{l1ChainID, l2ChainID, enableGovernance, paused, requiredProtocolVersion, recommendedProtocolVersion, unsafeBlockSigner, basefeeScalar, blobBasefeeScalar, gasPriceOracleBaseFeeScalar, gasPriceOracleBlobBaseFeeScalar, saltMixer}' "$DEPLOY_CONFIG_PATH"
+
+  log_success "All validations passed for '$DEPLOY_CONFIG_PATH'."
+}
+
+# =========================
+# STAGE 2: 在 L1 网络上部署合约
+# =========================
+stage_deploy_l1_contracts() {
+  log_info "STAGE 2: Deploying L1 Contracts directly to L1 network..."
+  # shellcheck disable=SC1090
+  source "$L2_ENV_FILE"
+  export ETH_RPC_URL="$L1_RPC_URL"
+
+  log_info "Removing old broadcast artifacts..."
+  rm -rf optimism/packages/contracts-bedrock/broadcast
+
+  log_info "Waiting for any pending transactions to be mined..."
+  sleep 5
+
+  log_info "Fetching current nonce for the deployer address..."
+  NONCE=$(cast nonce --rpc-url "$L1_RPC_URL" "$ADDRESS_ADMIN_AND_DEPLOYER")
+  log_info "Current nonce is: $NONCE. Sending a dummy transaction to clear any pending transactions..."
+  SEND_OUTPUT=$(cast send --rpc-url "$L1_RPC_URL" --private-key "$PRIVATE_KEY_ADMIN_AND_DEPLOYER" --nonce "$NONCE" --value 0 "$ADDRESS_ADMIN_AND_DEPLOYER")
+  TX_HASH=$(echo "$SEND_OUTPUT" | grep transactionHash | awk '{print $2}')
+  log_info "Dummy transaction sent with hash: $TX_HASH. Waiting for it to be mined..."
+  cast receipt --rpc-url "$L1_RPC_URL" "$TX_HASH" --rpc-timeout 120
+  log_success "Dummy transaction mined."
+
+  log_info "Checking L1 deployer balance..."
+  BAL_WEI=$(get_balance_wei "$ADDRESS_ADMIN_AND_DEPLOYER")
+  if [[ "$BAL_WEI" == "0" || -z "$BAL_WEI" ]]; then
+    log_warning "Could not read L1 balance for $ADDRESS_ADMIN_AND_DEPLOYER; proceeding anyway."
+  else
+    THRESH=$((50 * 10**15)) # 0.05 ETH
+    if (( BAL_WEI < THRESH )); then
+      log_error "Insufficient L1 funds for $ADDRESS_ADMIN_AND_DEPLOYER. Have ~$(fmt_eth "$BAL_WEI") ETH, need >= 0.05 ETH."
+    else
+      log_info "L1 balance OK for $ADDRESS_ADMIN_AND_DEPLOYER: ~$(fmt_eth "$BAL_WEI") ETH"
+    fi
+  fi
+
+  if [[ "$BAL_WEI" == "0" || -z "$BAL_WEI" ]]; then
+    log_error "L1 deployer has no balance"
+  fi
+
+  L1_DEPLOY_LOG_PATH="$(pwd)/$GENERATED_DIR/l1_deploy.$(date +%s).log"
+
+  (
+    set -e
+    cd optimism/packages/contracts-bedrock || exit 1
+    log_info "Cleaning forge cache and artifacts..."
+    forge clean
+    set +e
+    forge script scripts/deploy/Deploy.s.sol:Deploy \
+      -vvvvv \
+      --rpc-url "$L1_RPC_URL" \
+      --private-key "$PRIVATE_KEY_ADMIN_AND_DEPLOYER" \
+      --broadcast 2>&1 | tee "$L1_DEPLOY_LOG_PATH"
+  )
+  L1_DEPLOY_EXIT_CODE=$?
+  if [ $L1_DEPLOY_EXIT_CODE -ne 0 ]; then
+    log_error "L1 deployment failed with exit code $L1_DEPLOY_EXIT_CODE. Check logs at $L1_DEPLOY_LOG_PATH"
+  fi
+  # Parse L2 config file path from log
+  if [[ -z "${L1_DEPLOY_LOG_PATH:-}" || ! -f "$L1_DEPLOY_LOG_PATH" ]]; then
+    log_error "L1 deployment log not found at: $L1_DEPLOY_LOG_PATH"
+  fi
+  L2_CONFIG_FILE=$(grep -o "L2 config file written to .*" "$L1_DEPLOY_LOG_PATH" | awk '{print $NF}')
+  if [ -z "$L2_CONFIG_FILE" ]; then
+    log_error "Failed to find L2 config file in deployment log: $L1_DEPLOY_LOG_PATH"
+  fi
+  log_info "L2 config file: $L2_CONFIG_FILE"
+  echo "INFO: Done deploying L1 contracts."
+}
+
+stage_verify_l1_contracts() {
+  (
+    echo "INFO: STAGE 3: Verifying L1 Contracts..."
+    cd "$WORKSPACE_DIR"
+    ./verify-l1.sh
+    echo "INFO: Done verifying L1 contracts."
+  )
+}
+
+# =========================
+# Main
+# =========================
+main() {
+  cd "$(dirname "$0")"
+  mkdir -p "$GENERATED_DIR"
+
+  case "${1:-}" in
+    prepare)
+      check_prerequisites
+      stage_prepare_l1_configs
+      stage_deploy_l1_contracts
+      log_success "Script finished successfully. All L1 contracts should be deployed."
+      ;;
+    *)
+      echo "Usage: $0 prepare"
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

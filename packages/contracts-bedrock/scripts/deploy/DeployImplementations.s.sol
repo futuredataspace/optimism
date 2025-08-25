@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity 0.8.15;
+pragma solidity >=0.8.15 <0.9.0;
 
 import { Script } from "forge-std/Script.sol";
 
@@ -38,6 +38,7 @@ import { IOPContractsManagerStandardValidator } from "interfaces/L1/IOPContracts
 import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 import { Solarray } from "scripts/libraries/Solarray.sol";
 import { ChainAssertions } from "scripts/deploy/ChainAssertions.sol";
+import { TransparentUpgradeableProxy } from "@openzeppelin/contracts/proxy/transparent/TransparentUpgradeableProxy.sol";
 
 contract DeployImplementations is Script {
     struct Input {
@@ -206,7 +207,7 @@ contract DeployImplementations is Script {
         address checkAddress;
         (blueprints.addressManager, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("AddressManager"), _input.salt);
         require(checkAddress == address(0), "OPCM-10");
-        (blueprints.proxy, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("Proxy"), _input.salt);
+        (blueprints.proxy, checkAddress) = DeployUtils.createDeterministicBlueprint(type(TransparentUpgradeableProxy).creationCode, _input.salt);
         require(checkAddress == address(0), "OPCM-20");
         (blueprints.proxyAdmin, checkAddress) = DeployUtils.createDeterministicBlueprint(vm.getCode("ProxyAdmin"), _input.salt);
         require(checkAddress == address(0), "OPCM-30");

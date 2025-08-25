@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.8.15 <0.9.0;
+pragma solidity 0.8.15;
 
 // Scripts
 import { Vm } from "forge-std/Vm.sol";
@@ -105,19 +105,6 @@ library DeployUtils {
         }
     }
 
-    function create2(bytes memory _creationCode, bytes32 _salt) internal returns (address payable addr_) {
-        Create2Deployer deployer = new Create2Deployer();
-        address preComputedAddress = deployer.computeAddress(_creationCode, _salt);
-
-        bytes memory existingCode = vm.rpc("eth_getCode", string.concat("[\"", vm.toString(preComputedAddress), "\",\"latest\"]"));
-        if (existingCode.length > 3) {
-            addr_ = payable(preComputedAddress);
-        } else {
-            addr_ = deployer.performCreate2(_creationCode, _salt);
-            require(addr_ == preComputedAddress, "CREATE2 address mismatch after deployment");
-        }
-    }
-
     /// @notice Deploys a contract deterministically using CREATE2. Alias for `create2`.
     function createDeterministic(string memory _name, bytes memory _args, bytes32 _salt) internal returns (address payable addr_) {
         return create2(_name, _args, _salt);
@@ -194,10 +181,6 @@ library DeployUtils {
     /// @return Deterministic address.
     function toIOAddress(address _sender, string memory _identifier) internal pure returns (address) {
         return address(uint160(uint256(keccak256(abi.encode(_sender, _identifier)))));
-    }
-
-    function getProxyCreationCode(string memory _name, address _impl, address _admin, bytes memory _opts) internal returns (bytes memory) {
-        return abi.encodePacked(vm.getCode(_name), abi.encode(_impl, _admin, _opts));
     }
 
     /// @notice Strips the first 4 bytes of `_data` and returns the remaining bytes

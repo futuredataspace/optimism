@@ -91,18 +91,15 @@ contract DeploySuperchain is Script {
         returns (ISuperchainConfig superchainConfigImpl, ISuperchainConfig superchainConfigProxy)
     {
         bytes32 implSalt = keccak256(abi.encodePacked("SuperchainConfigImpl", _input._salt));
-        address impl = DeployUtils.create2("SuperchainConfig", bytes(""), implSalt);
+        address impl = DeployUtils.create2("SuperchainConfig", implSalt);
         superchainConfigImpl = ISuperchainConfig(impl);
 
         bytes32 proxySalt = keccak256(abi.encodePacked("SuperchainConfigProxy", _input._salt));
         address proxy =
-            DeployUtils.create2("TransparentUpgradeableProxy", abi.encode(impl, _input._superchainProxyAdmin, bytes("")), proxySalt);
+            DeployUtils.create2("TransparentUpgradeableProxy", abi.encode(impl, _input._superchainProxyAdmin, ""));
         superchainConfigProxy = ISuperchainConfig(proxy);
 
-        vm.startPrank(_input._superchainProxyAdmin.owner());
-        _input._superchainProxyAdmin.upgrade(payable(proxy), impl);
-        superchainConfigProxy.initialize(_input._superchainProxyAdmin.owner());
-        vm.stopPrank();
+        superchainConfigProxy.initialize();
 
         vm.label(address(superchainConfigImpl), "SuperchainConfigImpl");
         vm.label(address(superchainConfigProxy), "SuperchainConfigProxy");
@@ -122,20 +119,17 @@ contract DeploySuperchain is Script {
         uint256 _recommended
     ) private returns (IProtocolVersions protocolVersionsImpl, IProtocolVersions protocolVersionsProxy) {
         bytes32 implSalt = keccak256(abi.encodePacked("ProtocolVersionsImpl", _input._salt));
-        address impl = DeployUtils.create2("ProtocolVersions", bytes(""), implSalt);
+        address impl = DeployUtils.create2("ProtocolVersions", implSalt);
         protocolVersionsImpl = IProtocolVersions(impl);
 
         bytes32 proxySalt = keccak256(abi.encodePacked("ProtocolVersionsProxy", _input._salt));
         address proxy =
-            DeployUtils.create2("TransparentUpgradeableProxy", abi.encode(impl, _input._superchainProxyAdmin, bytes("")), proxySalt);
+            DeployUtils.create2("TransparentUpgradeableProxy", abi.encode(impl, _input._superchainProxyAdmin, ""));
         protocolVersionsProxy = IProtocolVersions(proxy);
 
-        vm.startPrank(_input._superchainProxyAdmin.owner());
-        _input._superchainProxyAdmin.upgrade(payable(proxy), impl);
         protocolVersionsProxy.initialize(
             _finalSystemOwner, ProtocolVersion.wrap(_required), ProtocolVersion.wrap(_recommended)
         );
-        vm.stopPrank();
 
         vm.label(address(protocolVersionsImpl), "ProtocolVersionsImpl");
         vm.label(address(protocolVersionsProxy), "ProtocolVersionsProxy");

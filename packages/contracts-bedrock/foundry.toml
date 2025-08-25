@@ -7,9 +7,6 @@
 src   = 'src'
 script = 'scripts'
 
-# 【关键】Foundry 产物目录：与 Hardhat 的 artifacts/ 分离，避免互相覆盖/混淆
-# 之前的错误主要是脚本在找 Foundry 产物，而实际只有 Hardhat 产物。
-# 保持 forge 产物在 forge-artifacts 下，并确保每次部署前:
 #   forge clean && forge build -vvv
 out = 'forge-artifacts'
 
@@ -50,7 +47,8 @@ remappings = [
   'ds-test/=lib/forge-std/lib/ds-test/src',
   'safe-contracts/=lib/safe-contracts/contracts',
   'kontrol-cheatcodes/=lib/kontrol-cheatcodes/src',
-  'interfaces/=interfaces'
+  'interfaces/=interfaces',
+  'op-contracts-universal/=src/universal/'
 ]
 
 # 允许 Foundry 脚本读取/写入的路径（vm.readFile / vm.getCode 等）

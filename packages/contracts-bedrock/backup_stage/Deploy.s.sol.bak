@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity >=0.8.15 <0.9.0;
+pragma solidity 0.8.15;
 
 // Testing
 import { VmSafe } from "forge-std/Vm.sol";
@@ -26,7 +26,7 @@ import { ProxyAdmin } from "op-contracts-universal/ProxyAdmin.sol";
 
 /// @title Deploy
 /// @notice Script used to deploy a bedrock system. The entire system is deployed within the `run` function.
-contract Deploy is Script {
+contract Deploy is Script, StandardConstants {
     /// @notice The deploy config.
     DeployConfig internal cfg;
     /// @notice The artifacts contract.
@@ -40,16 +40,10 @@ contract Deploy is Script {
 
     /// @notice Entrypoint for the script.
     function run(string memory _variant) public returns (bool) {
-        // You can use the --sig "run(string)" argument to `forge script` to easily
-        // call this function.
-        // As an example, you can use "no-superchain" to skip deploying a new superchain,
-        // and instead just deploy an OP-chain against an existing superchain.
-        // This is useful for when you want to deploy a second chain against the same
-        // superchain.
-        if (keccak256(bytes(_variant)) == keccak256(bytes("no-superchain"))) {
+        if (Strings.equal(_variant, "no-superchain")) {
             _run(false);
         } else {
-            _run(true);
+            revert("Unknown variant");
         }
         return true;
     }
@@ -82,7 +76,7 @@ contract Deploy is Script {
             implementations,
             superchain,
             cfg.finalSystemOwner(),
-            cfg.getSaltMixer(),
+            cfg.getSaltMerger(),
             cfg
         );
 
@@ -103,8 +97,8 @@ contract Deploy is Script {
     function setUp() public virtual {
         cfg = new DeployConfig();
         artifacts = new Artifacts();
-        cfg.read(vm.envString("DEPLOY_CONFIG_PATH"));
-        artifacts.setUp();
+        cfg.read();
+        artifacts.setUp(cfg.l1ChainID(), cfg.l2ChainID());
     }
 
     /// @notice Deploy the superchain contracts.
@@ -140,18 +134,18 @@ contract Deploy is Script {
 
         DeployImplementations.Input memory input = DeployImplementations.Input({
             salt: keccak256(bytes(cfg.getSaltMixer())),
-                withdrawalDelaySeconds: cfg.faultGameWithdrawalDelay(),
-                minProposalSizeBytes: cfg.preimageOracleMinProposalSize(),
-                challengePeriodSeconds: cfg.preimageOracleChallengePeriod(),
-                proofMaturityDelaySeconds: cfg.proofMaturityDelaySeconds(),
-                disputeGameFinalityDelaySeconds: cfg.disputeGameFinalityDelaySeconds(),
-                mipsVersion: StandardConstants.MIPS_VERSION,
-                l1ContractsRelease: "dev",
-                protocolVersionsProxy: IProtocolVersions(artifacts.mustGetAddress("ProtocolVersionsProxy")),
+            withdrawalDelaySeconds: cfg.faultGameWithdrawalDelay(),
+            minProposalSizeBytes: cfg.preimageOracleMinProposalSize(),
+            challengePeriodSeconds: cfg.preimageOracleChallengePeriod(),
+            proofMaturityDelaySeconds: cfg.proofMaturityDelaySeconds(),
+            disputeGameFinalityDelaySeconds: cfg.disputeGameFinalityDelaySeconds(),
+            mipsVersion: StandardConstants.MIPS_VERSION,
+            l1ContractsRelease: "dev",
+            protocolVersionsProxy: IProtocolVersions(artifacts.mustGetAddress("ProtocolVersionsProxy")),
             superchainConfigProxy: ISuperchainConfig(artifacts.mustGetAddress("SuperchainConfigProxy")),
-                superchainProxyAdmin: superchainProxyAdmin,
-                upgradeController: superchainProxyAdmin.owner(),
-                challenger: cfg.l2OutputOracleChallenger()
+            superchainProxyAdmin: superchainProxyAdmin,
+            upgradeController: superchainProxyAdmin.owner(),
+            challenger: cfg.l2OutputOracleChallenger()
         });
 
         DeployImplementations.Output memory dio = di.run(input);
