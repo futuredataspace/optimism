@@ -94,18 +94,28 @@ library DeployUtils {
         bytes memory initCode = abi.encodePacked(vm.getCode(_name), _args);
         address preComputedAddress = deployer.computeAddress(initCode, _salt);
 
-        console.log(string.concat("Deploying ", _name, " with self-deployed CREATE2 deployer to ", vm.toString(preComputedAddress)));
-        addr_ = deployer.performCreate2(initCode, _salt);
-        require(addr_ == preComputedAddress, "CREATE2 address mismatch after deployment");
+        bytes memory existingCode = vm.rpc("eth_getCode", string.concat("[\"", vm.toString(preComputedAddress), "\",\"latest\"]"));
+        if (existingCode.length > 3) {
+            console.log(string.concat("Contract ", _name, " already deployed at ", vm.toString(preComputedAddress), " (attaching)"));
+            addr_ = payable(preComputedAddress);
+        } else {
+            console.log(string.concat("Deploying ", _name, " with self-deployed CREATE2 deployer to ", vm.toString(preComputedAddress)));
+            addr_ = deployer.performCreate2(initCode, _salt);
+            require(addr_ == preComputedAddress, "CREATE2 address mismatch after deployment");
+        }
     }
 
     function create2(bytes memory _creationCode, bytes32 _salt) internal returns (address payable addr_) {
         Create2Deployer deployer = new Create2Deployer();
         address preComputedAddress = deployer.computeAddress(_creationCode, _salt);
 
-        console.log(string.concat("Deploying contract with self-deployed CREATE2 deployer to ", vm.toString(preComputedAddress)));
-        addr_ = deployer.performCreate2(_creationCode, _salt);
-        require(addr_ == preComputedAddress, "CREATE2 address mismatch after deployment");
+        bytes memory existingCode = vm.rpc("eth_getCode", string.concat("[\"", vm.toString(preComputedAddress), "\",\"latest\"]"));
+        if (existingCode.length > 3) {
+            addr_ = payable(preComputedAddress);
+        } else {
+            addr_ = deployer.performCreate2(_creationCode, _salt);
+            require(addr_ == preComputedAddress, "CREATE2 address mismatch after deployment");
+        }
     }
 
     /// @notice Deploys a contract deterministically using CREATE2. Alias for `create2`.

@@ -4,7 +4,6 @@ pragma solidity >=0.8.15 <0.9.0;
 import { Script } from "forge-std/Script.sol";
 import { console2 } from "forge-std/console2.sol";
 
-import { DeployUtils } from "scripts/libraries/DeployUtils.sol";
 import { Predeploys } from "src/libraries/Predeploys.sol";
 
 import { ProxyAdmin } from "op-contracts-universal/ProxyAdmin.sol";
@@ -36,17 +35,17 @@ import { DeployConfig } from "scripts/deploy/DeployConfig.s.sol";
 /// @notice This script deploys the L1 contracts for an OP Chain.
 /// It is a stateless script that can be used to deploy a new OP Chain.
 contract DeployOpChain is Script {
-struct OpChainContracts {
-    ProxyAdmin proxyAdmin;
-    AddressManager addressManager;
+    struct OpChainContracts {
+        ProxyAdmin proxyAdmin;
+        AddressManager addressManager;
         ISystemConfig systemConfigProxy;
         IDisputeGameFactory disputeGameFactoryProxy;
         IAnchorStateRegistry anchorStateRegistryProxy;
         IOptimismPortal optimismPortalProxy;
         IETHLockbox ethLockboxProxy;
-    IL1StandardBridge l1StandardBridgeProxy;
-    IL1CrossDomainMessenger l1CrossDomainMessengerProxy;
-    IL1ERC721Bridge l1ERC721BridgeProxy;
+        IL1StandardBridge l1StandardBridgeProxy;
+        IL1CrossDomainMessenger l1CrossDomainMessengerProxy;
+        IL1ERC721Bridge l1ERC721BridgeProxy;
         IL1StandardBridge l2OutputOracleProxy; // Re-using L1StandardBridge as a placeholder type
     }
 
@@ -56,10 +55,7 @@ struct OpChainContracts {
         address finalSystemOwner,
         string memory saltMixer,
         DeployConfig cfg
-    )
-        public
-        returns (OpChainContracts memory opChainContracts)
-    {
+    ) public returns (OpChainContracts memory opChainContracts) {
         opChainContracts = _deployProxies(_implementations, finalSystemOwner, saltMixer);
 
         _initializeSystem(
@@ -79,19 +75,14 @@ struct OpChainContracts {
         DeployImplementations.Output memory _implementations,
         address proxyAdminOwner,
         string memory saltMixer
-    )
-        internal
-        returns (OpChainContracts memory opChainContracts)
-    {
+    ) internal returns (OpChainContracts memory opChainContracts) {
         bytes32 saltMixerHash = keccak256(abi.encodePacked(saltMixer));
 
         bytes32 proxyAdminSalt = keccak256(abi.encodePacked("ProxyAdmin", saltMixerHash));
-        bytes memory proxyAdminArgs = abi.encode(proxyAdminOwner);
-        address proxyAdminAddr = DeployUtils.create2("ProxyAdmin", proxyAdminArgs, proxyAdminSalt);
-        opChainContracts.proxyAdmin = ProxyAdmin(payable(proxyAdminAddr));
+        opChainContracts.proxyAdmin = new ProxyAdmin{ salt: proxyAdminSalt }(proxyAdminOwner);
 
         bytes32 addressManagerImplSalt = keccak256(abi.encodePacked("AddressManagerImpl", saltMixerHash));
-        address addressManagerImpl = DeployUtils.create2("AddressManager", bytes(""), addressManagerImplSalt);
+        address addressManagerImpl = address(new AddressManager{ salt: addressManagerImplSalt }());
 
         opChainContracts.addressManager = AddressManager(
             payable(
@@ -197,9 +188,7 @@ struct OpChainContracts {
         DisputeGameFactory disputeGameFactoryProxy,
         DeployConfig cfg,
         ISuperchainConfig _superchainConfig
-    )
-        internal
-    {
+    ) internal {
         vm.startPrank(proxyAdmin.owner());
         proxyAdmin.upgrade(payable(address(_opChainContracts.l1StandardBridgeProxy)), address(_implementations.l1StandardBridgeImpl));
         proxyAdmin.upgrade(
@@ -266,12 +255,10 @@ struct OpChainContracts {
         address _implementation,
         ProxyAdmin proxyAdmin,
         string memory saltMixer
-    )
-        internal
-        returns (address)
-    {
+    ) internal returns (address) {
         bytes32 salt = keccak256(abi.encodePacked(_name, saltMixer));
-        bytes memory args = abi.encode(_implementation, proxyAdmin, "");
-        return DeployUtils.create2("TransparentUpgradeableProxy", args, salt);
+        return address(new TransparentUpgradeableProxy{ salt: salt }(
+            _implementation, address(proxyAdmin), bytes("")
+        ));
     }
 }
