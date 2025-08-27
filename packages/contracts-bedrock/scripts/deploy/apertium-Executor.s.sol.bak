@@ -1,0 +1,363 @@
+// SPDX-License-Identifier: MIT
+pragma solidity >=0.8.15 <0.9.0;
+
+import { Script } from "forge-std/Script.sol";
+import { console } from "forge-std/console.sol";
+
+/*//////////////////////////////////////////////////////////////
+                         Minimal Interfaces
+  (只声明初始化所需的最小函数/结构，避免编译进完整实现)
+//////////////////////////////////////////////////////////////*/
+
+interface IProxyAdmin {
+    function transferOwnership(address newOwner) external;
+}
+
+interface ISystemConfigLite {
+    struct ResourceConfig {
+        uint32  maxResourceLimit;
+        uint8   elasticityMultiplier;
+        uint8   baseFeeMaxChangeDenominator;
+        uint32  minimumBaseFee;
+        uint32  systemTxMaxGas;
+        uint256 maximumBaseFee;
+    }
+
+    struct Addresses {
+        address l1CrossDomainMessenger;
+        address l1ERC721Bridge;
+        address l1StandardBridge;
+        address optimismPortal;
+        address optimismMintableERC20Factory;
+    }
+
+    function initialize(
+        address owner,
+        uint32 basefeeScalar,
+        uint32 blobbasefeeScalar,
+        bytes32 batcherHash,
+        uint64 gasLimit,
+        address unsafeBlockSigner,
+        ResourceConfig calldata resourceConfig,
+        address batchInbox,
+        Addresses calldata addrs,
+        uint256 l2ChainId,
+        address superchainConfig
+    ) external;
+}
+
+interface IOptimismPortal2Lite {
+    function initialize(
+        ISystemConfigLite systemConfig,
+        address anchorStateRegistry, // 作为 address 传入即可
+        address ethLockbox
+    ) external;
+}
+
+interface IL1CrossDomainMessengerLite {
+    function initialize(
+        ISystemConfigLite systemConfig,
+        IOptimismPortal2Lite optimismPortal
+    ) external;
+}
+
+interface IL1StandardBridgeLite {
+    function initialize(
+        IL1CrossDomainMessengerLite messenger,
+        ISystemConfigLite systemConfig
+    ) external;
+}
+
+interface IL1ERC721BridgeLite {
+    function initialize(
+        IL1CrossDomainMessengerLite messenger,
+        ISystemConfigLite systemConfig
+    ) external;
+}
+
+interface IDisputeGameFactoryLite {
+    function initialize(address owner) external;
+}
+
+interface IAnchorStateRegistryLite {
+    struct Proposal {
+        bytes32 root;              // Types.Hash is bytes32 under the hood
+        uint256 l2SequenceNumber;
+    }
+
+    function initialize(
+        ISystemConfigLite systemConfig,
+        IDisputeGameFactoryLite disputeGameFactory,
+        Proposal calldata startingAnchor,
+        uint8 defaultGameType
+    ) external;
+}
+
+/*//////////////////////////////////////////////////////////////
+                           Executor Script
+//////////////////////////////////////////////////////////////*/
+
+/// @title ApertiumExecutor
+/// @notice 初始化和移交 L1 代理合约权限（尽量瘦身编译避免栈深）
+contract ApertiumExecutor is Script {
+    // 与原脚本一致的聚合结构（为向后兼容）
+    struct ProxyAddresses {
+        address systemConfig;
+        address optimismPortal;
+        address l1CrossDomainMessenger;
+        address l1StandardBridge;
+        address disputeGameFactory;
+        address anchorStateRegistry;
+        address l1ERC721Bridge;
+    }
+
+    // OP Bedrock 的 GameTypes.CANNON == 0
+    uint8 internal constant GAME_TYPE_CANNON = 0;
+
+    /*//////////////////////////////////////////////////////////////
+                        Public entrypoints
+    //////////////////////////////////////////////////////////////*/
+
+    /// @notice 原入口（保留），内部转调
+    function initializeSystem(
+        ProxyAddresses memory proxies,
+        address superchainConfigProxy,
+        address finalSystemOwner,
+        uint32 basefeeScalar,
+        uint32 blobbasefeeScalar,
+        uint64 l2GenesisBlockGasLimit,
+        address p2pSequencerAddress,
+        uint256 l1ChainID,
+        uint256 l2ChainID,
+        uint256 l2OutputOracleStartingBlockNumber
+    ) public {
+        _initializeSystem(
+            proxies,
+            superchainConfigProxy,
+            finalSystemOwner,
+            basefeeScalar,
+            blobbasefeeScalar,
+            l2GenesisBlockGasLimit,
+            p2pSequencerAddress,
+            l1ChainID,
+            l2ChainID,
+            l2OutputOracleStartingBlockNumber
+        );
+    }
+
+    /// @notice 扁平参数入口：避免 tuple 解包导致的 Yul 栈深
+    function initializeSystemFlat(
+        // 展平 ProxyAddresses
+        address systemConfig,
+        address optimismPortal,
+        address l1CrossDomainMessenger,
+        address l1StandardBridge,
+        address disputeGameFactory,
+        address anchorStateRegistry,
+        address l1ERC721Bridge,
+        // 其余参数
+        address superchainConfigProxy,
+        address finalSystemOwner,
+        uint32 basefeeScalar,
+        uint32 blobbasefeeScalar,
+        uint64 l2GenesisBlockGasLimit,
+        address p2pSequencerAddress,
+        uint256 l1ChainID,
+        uint256 l2ChainID,
+        uint256 l2OutputOracleStartingBlockNumber
+    ) external {
+        ProxyAddresses memory proxies = ProxyAddresses({
+            systemConfig: systemConfig,
+            optimismPortal: optimismPortal,
+            l1CrossDomainMessenger: l1CrossDomainMessenger,
+            l1StandardBridge: l1StandardBridge,
+            disputeGameFactory: disputeGameFactory,
+            anchorStateRegistry: anchorStateRegistry,
+            l1ERC721Bridge: l1ERC721Bridge
+        });
+
+        _initializeSystem(
+            proxies,
+            superchainConfigProxy,
+            finalSystemOwner,
+            basefeeScalar,
+            blobbasefeeScalar,
+            l2GenesisBlockGasLimit,
+            p2pSequencerAddress,
+            l1ChainID,
+            l2ChainID,
+            l2OutputOracleStartingBlockNumber
+        );
+    }
+
+    /// @notice 最终把 ProxyAdmin 所有权移交给最终 owner
+    function finalizeOwnership(address proxyAdmin, address finalSystemOwner) public {
+        console.log("APERTIUM EXECUTOR | Finalizing Ownership...");
+        vm.startBroadcast();
+        IProxyAdmin(proxyAdmin).transferOwnership(finalSystemOwner);
+        vm.stopBroadcast();
+        console.log("[SUCCESS] APERTIUM EXECUTOR | Ownership finalized.");
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                        Internal: step-by-step init
+    //////////////////////////////////////////////////////////////*/
+
+    function _initializeSystem(
+        ProxyAddresses memory p,
+        address superchainConfigProxy,
+        address finalSystemOwner,
+        uint32 basefeeScalar,
+        uint32 blobbasefeeScalar,
+        uint64 l2GenesisBlockGasLimit,
+        address p2pSequencerAddress,
+        uint256 l1ChainID,
+        uint256 l2ChainID,
+        uint256 l2OutputOracleStartingBlockNumber
+    ) internal {
+        console.log("APERTIUM EXECUTOR | Initializing System...");
+        vm.startBroadcast();
+
+        // 1) SystemConfig
+        _initSystemConfig(
+            p,
+            superchainConfigProxy,
+            finalSystemOwner,
+            basefeeScalar,
+            blobbasefeeScalar,
+            l2GenesisBlockGasLimit,
+            p2pSequencerAddress,
+            l1ChainID,
+            l2ChainID
+        );
+
+        // 2) OptimismPortal
+        _initOptimismPortal(p);
+
+        // 3) L1XDM
+        _initL1CrossDomainMessenger(p);
+
+        // 4) L1StandardBridge
+        _initL1StandardBridge(p);
+
+        // 5) L1ERC721Bridge
+        _initL1ERC721Bridge(p);
+
+        // 6) DisputeGameFactory
+        _initDisputeGameFactory(p, finalSystemOwner);
+
+        // 7) AnchorStateRegistry
+        _initAnchorStateRegistry(p, l2OutputOracleStartingBlockNumber);
+
+        vm.stopBroadcast();
+        console.log("[SUCCESS] APERTIUM EXECUTOR | System initialized.");
+    }
+
+    function _initSystemConfig(
+        ProxyAddresses memory p,
+        address superchainConfigProxy,
+        address finalSystemOwner,
+        uint32 basefeeScalar,
+        uint32 blobbasefeeScalar,
+        uint64 l2GenesisBlockGasLimit,
+        address p2pSequencerAddress,
+        uint256 l1ChainID,
+        uint256 l2ChainID
+    ) internal {
+        ISystemConfigLite sys = ISystemConfigLite(p.systemConfig);
+
+        ISystemConfigLite.ResourceConfig memory rc = ISystemConfigLite.ResourceConfig({
+            maxResourceLimit: 20_000_000,
+            elasticityMultiplier: 10,
+            baseFeeMaxChangeDenominator: 8,
+            minimumBaseFee: 1,
+            systemTxMaxGas: 1_000_000,
+            maximumBaseFee: 10_000_000_000_000_000_000 // 1e19
+        });
+
+        ISystemConfigLite.Addresses memory addrs = ISystemConfigLite.Addresses({
+            l1CrossDomainMessenger: p.l1CrossDomainMessenger,
+            l1ERC721Bridge:        p.l1ERC721Bridge,
+            l1StandardBridge:      p.l1StandardBridge,
+            optimismPortal:        p.optimismPortal,
+            optimismMintableERC20Factory: address(0)
+        });
+
+        sys.initialize(
+            finalSystemOwner,
+            basefeeScalar,
+            blobbasefeeScalar,
+            bytes32(0),                      // batcherHash
+            l2GenesisBlockGasLimit,
+            p2pSequencerAddress,             // unsafeBlockSigner (devnet 用 sequencer addr)
+            rc,
+            _getBatchInbox(l1ChainID),
+            addrs,
+            l2ChainID,
+            superchainConfigProxy            // 作为 address 传入
+        );
+    }
+
+    function _initOptimismPortal(ProxyAddresses memory p) internal {
+        IOptimismPortal2Lite(p.optimismPortal).initialize(
+            ISystemConfigLite(p.systemConfig),
+            p.anchorStateRegistry, // address 传入
+            address(0)             // IETHLockbox(0)
+        );
+    }
+
+    function _initL1CrossDomainMessenger(ProxyAddresses memory p) internal {
+        IL1CrossDomainMessengerLite(p.l1CrossDomainMessenger).initialize(
+            ISystemConfigLite(p.systemConfig),
+            IOptimismPortal2Lite(p.optimismPortal)
+        );
+    }
+
+    function _initL1StandardBridge(ProxyAddresses memory p) internal {
+        IL1StandardBridgeLite(p.l1StandardBridge).initialize(
+            IL1CrossDomainMessengerLite(p.l1CrossDomainMessenger),
+            ISystemConfigLite(p.systemConfig)
+        );
+    }
+
+    function _initL1ERC721Bridge(ProxyAddresses memory p) internal {
+        IL1ERC721BridgeLite(p.l1ERC721Bridge).initialize(
+            IL1CrossDomainMessengerLite(p.l1CrossDomainMessenger),
+            ISystemConfigLite(p.systemConfig)
+        );
+    }
+
+    function _initDisputeGameFactory(ProxyAddresses memory p, address finalSystemOwner) internal {
+        IDisputeGameFactoryLite(p.disputeGameFactory).initialize(finalSystemOwner);
+    }
+
+    function _initAnchorStateRegistry(
+        ProxyAddresses memory p,
+        uint256 l2OutputOracleStartingBlockNumber
+    ) internal {
+        IAnchorStateRegistryLite.Proposal memory startingAnchor = IAnchorStateRegistryLite.Proposal({
+            root: bytes32(0),
+            l2SequenceNumber: l2OutputOracleStartingBlockNumber
+        });
+
+        IAnchorStateRegistryLite(p.anchorStateRegistry).initialize(
+            ISystemConfigLite(p.systemConfig),
+            IDisputeGameFactoryLite(p.disputeGameFactory),
+            startingAnchor,
+            GAME_TYPE_CANNON
+        );
+    }
+
+    /*//////////////////////////////////////////////////////////////
+                              Helpers
+    //////////////////////////////////////////////////////////////*/
+
+    function _getBatchInbox(uint256 _l1ChainID) internal pure returns (address) {
+        // 901: Sepolia；其它（如 Holesky/本地）走 devnet 地址
+        if (_l1ChainID == 901) {
+            return 0xFf00000000000000000000000000000000000901;
+        } else {
+            return 0xfF00000000000000000000000000000000000000;
+        }
+    }
+}
