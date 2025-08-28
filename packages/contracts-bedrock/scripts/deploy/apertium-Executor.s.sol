@@ -1,27 +1,25 @@
 // SPDX-License-Identifier: MIT
 pragma solidity >=0.8.15 <0.9.0;
 
-import { Script } from "forge-std/Script.sol";
-import { console } from "forge-std/console.sol";
+import {Script} from "forge-std/Script.sol";
+import {console} from "forge-std/console.sol";
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   仅保留最小接口，避免 import src/ 与 interfaces/ 造成全仓库编译
-   ───────────────────────────────────────────────────────────────────────────── */
+// 只引接口
+import {ISuperchainConfig} from "interfaces/L1/ISuperchainConfig.sol";
+import {ISystemConfig} from "interfaces/L1/ISystemConfig.sol";
+import {IL1CrossDomainMessenger} from "interfaces/L1/IL1CrossDomainMessenger.sol";
+import {IL1StandardBridge} from "interfaces/L1/IL1StandardBridge.sol";
+import {IL1ERC721Bridge} from "interfaces/L1/IL1ERC721Bridge.sol";
+import {IOptimismPortal2 as IOptimismPortal} from "interfaces/L1/IOptimismPortal2.sol";
+import {IDisputeGameFactory} from "interfaces/dispute/IDisputeGameFactory.sol";
+import {IAnchorStateRegistry} from "interfaces/dispute/IAnchorStateRegistry.sol";
+import {IETHLockbox} from "interfaces/L1/IETHLockbox.sol";
+import {IResourceMetering} from "interfaces/L1/IResourceMetering.sol";
 
-// SuperchainConfig 仅作类型占位（SystemConfig.initialize 需要）
-interface ISuperchainConfig {}
+// 最小初始化接口
+interface IProxyAdmin { function transferOwnership(address newOwner) external; }
 
-// SystemConfig 最小接口（签名与参数布局需与实现保持一致）
-interface ISystemConfig {
-    struct ResourceConfig {
-        uint32  maxResourceLimit;
-        uint8   elasticityMultiplier;
-        uint8   baseFeeMaxChangeDenominator;
-        uint256 minimumBaseFee;
-        uint256 systemTxMaxGas;
-        uint256 maximumBaseFee;
-    }
-
+interface ISystemConfigInit {
     struct Addresses {
         address l1CrossDomainMessenger;
         address l1ERC721Bridge;
@@ -29,90 +27,63 @@ interface ISystemConfig {
         address optimismPortal;
         address optimismMintableERC20Factory;
     }
-
     function initialize(
-        address                _owner,
-        uint32                 _basefeeScalar,
-        uint32                 _blobbasefeeScalar,
-        bytes32                _batcherHash,
-        uint64                 _l2GenesisBlockGasLimit,
-        address                _unsafeBlockSigner,
-        ResourceConfig calldata _resourceConfig,
-        address                _batchInbox,
-        Addresses calldata     _addresses,
-        uint256                _l2ChainID,
-        ISuperchainConfig      _superchainConfig
+        address _owner,
+        uint32 _basefeeScalar,
+        uint32 _blobbasefeeScalar,
+        bytes32 _batcherHash,
+        uint64 _gasLimit,
+        address _unsafeBlockSigner,
+        IResourceMetering.ResourceConfig calldata _config,
+        address _batchInboxAddress,
+        Addresses calldata _addrs,
+        uint256 _l2ChainId,
+        ISuperchainConfig _superchainConfig
     ) external;
 }
 
-// OptimismPortal2 最小接口
-interface IOptimismPortal2 {
+interface IOptimismPortalInit {
     function initialize(
-        ISystemConfig        _systemConfig,
-        address              _anchorStateRegistry, // 作为 IAnchorStateRegistry 传入地址也可
-        address              _ethLockbox          // 可为 address(0)
+        ISystemConfig _systemConfig,
+        IAnchorStateRegistry _anchorStateRegistry,
+        IETHLockbox _ethLockbox
     ) external;
 }
 
-// L1CrossDomainMessenger 最小接口
-interface IL1CrossDomainMessenger {
+interface IL1CDMInit {
     function initialize(
-        ISystemConfig   _systemConfig,
-        IOptimismPortal2 _portal
+        ISystemConfig _systemConfig,
+        IOptimismPortal _optimismPortal
     ) external;
 }
 
-// L1StandardBridge 最小接口
-interface IL1StandardBridge {
+interface IL1StandardBridgeInit {
     function initialize(
-        IL1CrossDomainMessenger _messenger,
-        ISystemConfig           _systemConfig
+        IL1CrossDomainMessenger _cdm,
+        ISystemConfig _systemConfig
     ) external;
 }
 
-// L1ERC721Bridge 最小接口
-interface IL1ERC721Bridge {
+interface IL1ERC721BridgeInit {
     function initialize(
-        IL1CrossDomainMessenger _messenger,
-        ISystemConfig           _systemConfig
+        IL1CrossDomainMessenger _cdm,
+        ISystemConfig _systemConfig
     ) external;
 }
 
-// DisputeGameFactory 最小接口
-interface IDisputeGameFactory {
-    function initialize(address _owner) external;
-}
+interface IDisputeGameFactoryInit { function initialize(address _owner) external; }
 
-// AnchorStateRegistry 最小接口（Proposal / GameTypes 简化）
-interface IAnchorStateRegistry {
-    struct Proposal {
-        bytes32 root;            // 等价于 Types.Hash.wrap(bytes32)
-        uint256 l2SequenceNumber;
-    }
-
-    // 注意：Bedrock 中 CANNON 的枚举值为 0，这里只声明一个即可
-    enum GameTypes { CANNON }
-
+interface IAnchorStateRegistryInit {
+    struct Proposal { bytes32 root; uint256 l2SequenceNumber; }
     function initialize(
-        ISystemConfig        _systemConfig,
-        IDisputeGameFactory  _factory,
-        Proposal calldata    _startingAnchor,
-        GameTypes            _gameType
+        ISystemConfig _systemConfig,
+        IDisputeGameFactory _factory,
+        Proposal calldata _startingAnchor,
+        uint8 _gameType
     ) external;
 }
-
-// ProxyAdmin 最小接口
-interface IProxyAdmin {
-    function transferOwnership(address newOwner) external;
-}
-
-/* ─────────────────────────────────────────────────────────────────────────────
-   ApertiumExecutor（扁平参数版本）
-   ───────────────────────────────────────────────────────────────────────────── */
 
 contract ApertiumExecutor is Script {
-
-    /// @notice 直接用扁平参数，避免 struct 造成脚本 CLI 传参复杂化
     function initializeSystemFlat(
         address systemConfigProxy,
         address optimismPortalProxy,
@@ -123,79 +94,78 @@ contract ApertiumExecutor is Script {
         address l1ERC721BridgeProxy,
         address superchainConfigProxy,
         address finalSystemOwner,
-        uint32  basefeeScalar,
-        uint32  blobbasefeeScalar,
-        uint64  l2GenesisBlockGasLimit,
+        uint32 basefeeScalar,
+        uint32 blobbasefeeScalar,
+        uint64 l2GenesisBlockGasLimit,
         address p2pSequencerAddress,
         uint256 l1ChainID,
         uint256 l2ChainID,
         uint256 l2OutputOracleStartingBlockNumber
     ) public {
-        console.log("APERTIUM EXECUTOR | Initializing System...");
+        console.log("APERTIUM EXECUTOR | Initializing System (flat)...");
         vm.startBroadcast();
 
-        // 1) SystemConfig.initialize
-        ISystemConfig.ResourceConfig memory resourceConfig = _getResourceConfig();
-        ISystemConfig.Addresses memory addrs = ISystemConfig.Addresses({
+        // SystemConfig.initialize
+        IResourceMetering.ResourceConfig memory rc = _getResourceConfig();
+        ISystemConfigInit.Addresses memory addrs = ISystemConfigInit.Addresses({
             l1CrossDomainMessenger: l1CrossDomainMessengerProxy,
-            l1ERC721Bridge:         l1ERC721BridgeProxy,
-            l1StandardBridge:       l1StandardBridgeProxy,
-            optimismPortal:         optimismPortalProxy,
+            l1ERC721Bridge:        l1ERC721BridgeProxy,
+            l1StandardBridge:      l1StandardBridgeProxy,
+            optimismPortal:        optimismPortalProxy,
             optimismMintableERC20Factory: address(0)
         });
 
-        ISystemConfig(systemConfigProxy).initialize(
+        ISystemConfigInit(systemConfigProxy).initialize(
             finalSystemOwner,
             basefeeScalar,
             blobbasefeeScalar,
-            bytes32(0),                 // _batcherHash
+            bytes32(0),
             l2GenesisBlockGasLimit,
-            p2pSequencerAddress,        // _unsafeBlockSigner
-            resourceConfig,
-            _getBatchInbox(l1ChainID),  // _batchInbox
+            p2pSequencerAddress,
+            rc,
+            _getBatchInbox(l1ChainID),
             addrs,
             l2ChainID,
             ISuperchainConfig(superchainConfigProxy)
         );
 
-        // 2) OptimismPortal.initialize
-        IOptimismPortal2(optimismPortalProxy).initialize(
+        // OptimismPortal.initialize
+        IOptimismPortalInit(optimismPortalProxy).initialize(
             ISystemConfig(systemConfigProxy),
-            anchorStateRegistryProxy,      // 直接传地址
-            address(0)                     // IETHLockbox(0)
+            IAnchorStateRegistry(anchorStateRegistryProxy),
+            IETHLockbox(address(0))
         );
 
-        // 3) L1CrossDomainMessenger.initialize
-        IL1CrossDomainMessenger(l1CrossDomainMessengerProxy).initialize(
+        // L1CrossDomainMessenger.initialize
+        IL1CDMInit(l1CrossDomainMessengerProxy).initialize(
             ISystemConfig(systemConfigProxy),
-            IOptimismPortal2(optimismPortalProxy)
+            IOptimismPortal(optimismPortalProxy)
         );
 
-        // 4) L1StandardBridge.initialize
-        IL1StandardBridge(l1StandardBridgeProxy).initialize(
+        // L1StandardBridge.initialize
+        IL1StandardBridgeInit(l1StandardBridgeProxy).initialize(
             IL1CrossDomainMessenger(l1CrossDomainMessengerProxy),
             ISystemConfig(systemConfigProxy)
         );
 
-        // 5) L1ERC721Bridge.initialize
-        IL1ERC721Bridge(l1ERC721BridgeProxy).initialize(
+        // L1ERC721Bridge.initialize
+        IL1ERC721BridgeInit(l1ERC721BridgeProxy).initialize(
             IL1CrossDomainMessenger(l1CrossDomainMessengerProxy),
             ISystemConfig(systemConfigProxy)
         );
 
-        // 6) DisputeGameFactory.initialize
-        IDisputeGameFactory(disputeGameFactoryProxy).initialize(finalSystemOwner);
+        // DisputeGameFactory.initialize
+        IDisputeGameFactoryInit(disputeGameFactoryProxy).initialize(finalSystemOwner);
 
-        // 7) AnchorStateRegistry.initialize
-        IAnchorStateRegistry.Proposal memory startingAnchor = IAnchorStateRegistry.Proposal({
-            root: bytes32(0),
-            l2SequenceNumber: l2OutputOracleStartingBlockNumber
-        });
-        IAnchorStateRegistry(anchorStateRegistryProxy).initialize(
+        // AnchorStateRegistry.initialize
+        IAnchorStateRegistryInit.Proposal memory startingAnchor =
+            IAnchorStateRegistryInit.Proposal({root: bytes32(0), l2SequenceNumber: l2OutputOracleStartingBlockNumber});
+        uint8 GAME_TYPE_CANNON = 0; // 与目标合约枚举 ABI 等价
+        IAnchorStateRegistryInit(anchorStateRegistryProxy).initialize(
             ISystemConfig(systemConfigProxy),
             IDisputeGameFactory(disputeGameFactoryProxy),
             startingAnchor,
-            IAnchorStateRegistry.GameTypes.CANNON
+            GAME_TYPE_CANNON
         );
 
         vm.stopBroadcast();
@@ -210,25 +180,20 @@ contract ApertiumExecutor is Script {
         console.log("[SUCCESS] APERTIUM EXECUTOR | Ownership finalized.");
     }
 
-    // ---- Internal helpers ----
-
-    function _getResourceConfig() internal pure returns (ISystemConfig.ResourceConfig memory) {
-        return ISystemConfig.ResourceConfig({
-            maxResourceLimit:           20_000_000,
-            elasticityMultiplier:       10,
-            baseFeeMaxChangeDenominator: 8,
-            minimumBaseFee:             1,
-            systemTxMaxGas:             1_000_000,
-            maximumBaseFee:             10_000_000_000_000_000_000
+    function _getResourceConfig() internal pure returns (IResourceMetering.ResourceConfig memory) {
+        return IResourceMetering.ResourceConfig({
+            maxResourceLimit: 20_000_000,
+            elasticityMultiplier: uint8(10),
+            baseFeeMaxChangeDenominator: uint8(8),
+            minimumBaseFee: 1,
+            systemTxMaxGas: 1_000_000,
+            maximumBaseFee: 10_000_000_000_000_000_000
         });
     }
 
     function _getBatchInbox(uint256 _l1ChainID) internal pure returns (address) {
-        // 901 = Sepolia；Holesky(17000) 等统一走 devnet 常量地址（OP Stack 常用）
-        if (_l1ChainID == 901) {
-            return 0xFf00000000000000000000000000000000000901;
-        } else {
-            return 0xfF00000000000000000000000000000000000000;
-        }
+        return (_l1ChainID == 901)
+            ? 0xFf00000000000000000000000000000000000901
+            : 0xfF00000000000000000000000000000000000000;
     }
 }

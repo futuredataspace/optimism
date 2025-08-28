@@ -182,13 +182,14 @@ via_ir = true
 via_ir = false
 
 [rpc_endpoints]
-holesky = "https://ethereum-holesky-rpc.publicnode.com"
+holesky = "https://ethereum-holesky.publicnode.com"
 
 [profile.executor]
-sources   = "scripts"
-libs      = ["lib"]
-via_ir    = true
+# 关键：让本 profile 的 src 只指向一个几乎空目录，避免编译整个 src/
+src = "scripts/executor-src"
+
 optimizer = true
 optimizer_runs = 200
-sparse_mode = true
-ffi = true
+via_ir = true
+auto_detect_solc = true
+# 继承默认 remappings（不要在此 profile 覆盖 remappings；保持能找到 interfaces/ 与 forge-std/）
