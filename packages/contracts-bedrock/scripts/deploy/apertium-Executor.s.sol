@@ -84,6 +84,8 @@ interface IAnchorStateRegistryInit {
 }
 
 contract ApertiumExecutor is Script {
+    uint8 constant GAME_TYPE_CANNON = 0;
+
     function initializeSystemFlat(
         address systemConfigProxy,
         address optimismPortalProxy,
@@ -105,7 +107,7 @@ contract ApertiumExecutor is Script {
         console.log("APERTIUM EXECUTOR | Initializing System (flat)...");
         vm.startBroadcast();
 
-        // SystemConfig.initialize
+        // 1) SystemConfig
         IResourceMetering.ResourceConfig memory rc = _getResourceConfig();
         ISystemConfigInit.Addresses memory addrs = ISystemConfigInit.Addresses({
             l1CrossDomainMessenger: l1CrossDomainMessengerProxy,
@@ -114,7 +116,6 @@ contract ApertiumExecutor is Script {
             optimismPortal:        optimismPortalProxy,
             optimismMintableERC20Factory: address(0)
         });
-
         ISystemConfigInit(systemConfigProxy).initialize(
             finalSystemOwner,
             basefeeScalar,
@@ -129,47 +130,56 @@ contract ApertiumExecutor is Script {
             ISuperchainConfig(superchainConfigProxy)
         );
 
-        // OptimismPortal.initialize
+        // 2) OptimismPortal
         IOptimismPortalInit(optimismPortalProxy).initialize(
             ISystemConfig(systemConfigProxy),
             IAnchorStateRegistry(anchorStateRegistryProxy),
             IETHLockbox(address(0))
         );
 
-        // L1CrossDomainMessenger.initialize
+        // 3) L1CrossDomainMessenger
         IL1CDMInit(l1CrossDomainMessengerProxy).initialize(
             ISystemConfig(systemConfigProxy),
-            IOptimismPortal(optimismPortalProxy)
+            // IOptimismPortal2 有 payable fallback，必须强转 payable
+            IOptimismPortal(payable(optimismPortalProxy))
         );
 
-        // L1StandardBridge.initialize
+        // 4) L1StandardBridge
         IL1StandardBridgeInit(l1StandardBridgeProxy).initialize(
             IL1CrossDomainMessenger(l1CrossDomainMessengerProxy),
             ISystemConfig(systemConfigProxy)
         );
 
-        // L1ERC721Bridge.initialize
+        // 5) L1ERC721Bridge
         IL1ERC721BridgeInit(l1ERC721BridgeProxy).initialize(
             IL1CrossDomainMessenger(l1CrossDomainMessengerProxy),
             ISystemConfig(systemConfigProxy)
         );
 
-        // DisputeGameFactory.initialize
+        // 6) DisputeGameFactory
         IDisputeGameFactoryInit(disputeGameFactoryProxy).initialize(finalSystemOwner);
 
-        // AnchorStateRegistry.initialize
-        IAnchorStateRegistryInit.Proposal memory startingAnchor =
-            IAnchorStateRegistryInit.Proposal({root: bytes32(0), l2SequenceNumber: l2OutputOracleStartingBlockNumber});
-        uint8 GAME_TYPE_CANNON = 0; // 与目标合约枚举 ABI 等价
-        IAnchorStateRegistryInit(anchorStateRegistryProxy).initialize(
-            ISystemConfig(systemConfigProxy),
-            IDisputeGameFactory(disputeGameFactoryProxy),
-            startingAnchor,
-            GAME_TYPE_CANNON
-        );
+        // 7) AnchorStateRegistry —— 仅当 DGF 已有 CANNON 实现时才初始化
+        bool dgfReady = _dgfHasCannonImpl(disputeGameFactoryProxy, l2ChainID);
+        if (!dgfReady) {
+            //console.log("⚠️  DGF has no readable CANNON implementation; skipping AnchorStateRegistry.initialize for now.");
+            console.log("WARNING: DGF has no readable CANNON implementation; skipping AnchorStateRegistry.initialize for now.");
+        } else {
+            IAnchorStateRegistryInit.Proposal memory startingAnchor =
+                IAnchorStateRegistryInit.Proposal({
+                    root: bytes32(0),
+                    l2SequenceNumber: l2OutputOracleStartingBlockNumber
+                });
+            IAnchorStateRegistryInit(anchorStateRegistryProxy).initialize(
+                ISystemConfig(systemConfigProxy),
+                IDisputeGameFactory(disputeGameFactoryProxy),
+                startingAnchor,
+                GAME_TYPE_CANNON
+            );
+        }
 
         vm.stopBroadcast();
-        console.log("[SUCCESS] APERTIUM EXECUTOR | System initialized.");
+        console.log("[SUCCESS] APERTIUM EXECUTOR | System initialized (Anchor init skipped? ", !dgfReady, ").");
     }
 
     function finalizeOwnership(address proxyAdmin, address finalSystemOwner) public {
@@ -179,6 +189,8 @@ contract ApertiumExecutor is Script {
         vm.stopBroadcast();
         console.log("[SUCCESS] APERTIUM EXECUTOR | Ownership finalized.");
     }
+
+    // ---------------- internal helpers ----------------
 
     function _getResourceConfig() internal pure returns (IResourceMetering.ResourceConfig memory) {
         return IResourceMetering.ResourceConfig({
@@ -195,5 +207,26 @@ contract ApertiumExecutor is Script {
         return (_l1ChainID == 901)
             ? 0xFf00000000000000000000000000000000000901
             : 0xfF00000000000000000000000000000000000000;
+    }
+
+    // 仅“检查”是否存在实现：用多种常见签名读取，全部失败/回退则视为“未配置”
+    function _dgfHasCannonImpl(address dgf, uint256 l2ChainId) internal view returns (bool ok) {
+        // 1) gameImpls(uint8,uint256) -> address
+        (ok, ) = dgf.staticcall(abi.encodeWithSignature("gameImpls(uint8,uint256)", GAME_TYPE_CANNON, l2ChainId));
+        if (ok) return true;
+
+        // 2) gameImpls(uint8) -> address
+        (ok, ) = dgf.staticcall(abi.encodeWithSignature("gameImpls(uint8)", GAME_TYPE_CANNON));
+        if (ok) return true;
+
+        // 3) getGameImplementation(uint8,uint256) -> address
+        (ok, ) = dgf.staticcall(
+            abi.encodeWithSignature("getGameImplementation(uint8,uint256)", GAME_TYPE_CANNON, l2ChainId)
+        );
+        if (ok) return true;
+
+        // 4) getGameImplementation(uint8) -> address
+        (ok, ) = dgf.staticcall(abi.encodeWithSignature("getGameImplementation(uint8)", GAME_TYPE_CANNON));
+        return ok;
     }
 }
